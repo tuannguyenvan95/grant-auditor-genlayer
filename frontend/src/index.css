@@ -2,88 +2,96 @@
 
 @layer base {
   :root {
-    --bg-primary: #07070a;
-    --bg-secondary: #111118;
-    --accent-glow: rgba(99, 102, 241, 0.15);
+    --bg-app: #08090d;
+    --bg-surface: #0e1118;
+    --bg-elevated: #151822;
+    --border-subtle: rgba(255, 255, 255, 0.07);
+    --border-active: rgba(56, 189, 248, 0.35);
+    --cyan-glow: rgba(56, 189, 248, 0.15);
+    --emerald-glow: rgba(16, 185, 129, 0.15);
   }
 
   body {
-    background-color: var(--bg-primary);
-    color: #f4f4f5;
+    background-color: var(--bg-app);
+    color: #f3f4f6;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
     overflow-x: hidden;
+    margin: 0;
+    padding: 0;
     min-height: 100vh;
-    background-image: 
-      radial-gradient(circle at 15% 10%, rgba(99, 102, 241, 0.12) 0%, transparent 40%),
-      radial-gradient(circle at 85% 90%, rgba(168, 85, 247, 0.1) 0%, transparent 45%),
-      linear-gradient(rgba(255, 255, 255, 0.015) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(255, 255, 255, 0.015) 1px, transparent 1px);
-    background-size: 100% 100%, 100% 100%, 40px 40px, 40px 40px;
+    background-image:
+      radial-gradient(ellipse 80% 50% at 50% -20%, rgba(14, 116, 144, 0.15), transparent),
+      radial-gradient(ellipse 60% 50% at 90% 90%, rgba(16, 185, 129, 0.08), transparent),
+      linear-gradient(rgba(255, 255, 255, 0.012) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255, 255, 255, 0.012) 1px, transparent 1px);
+    background-size: 100% 100%, 100% 100%, 32px 32px, 32px 32px;
   }
 }
 
-/* Custom modern scrollbar for high-end fintech feel */
+/* Custom scrollbars for slick workstation layout */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
 }
 ::-webkit-scrollbar-track {
-  background: #09090e;
+  background: #08090d;
 }
 ::-webkit-scrollbar-thumb {
-  background: #272733;
-  border-radius: 3px;
+  background: #1e2230;
+  border-radius: 2px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #3f3f52;
+  background: #31374a;
 }
 
-/* Premium Glassmorphism Design Tokens */
-.glass-panel {
-  background: rgba(18, 18, 26, 0.65);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+/* Architectural Workstation Design Tokens */
+.workbench-card {
+  background: rgba(14, 17, 24, 0.75);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
   border: 1px solid rgba(255, 255, 255, 0.07);
-  border-radius: 1rem;
-  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
-  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  border-radius: 0.85rem;
+  box-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.45);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-.glass-panel-interactive {
-  background: rgba(20, 20, 30, 0.6);
-  backdrop-filter: blur(16px);
+.workbench-card:hover {
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.workbench-card-active {
+  background: rgba(18, 22, 32, 0.9);
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  box-shadow: 0 0 25px -5px rgba(56, 189, 248, 0.25);
+}
+
+.surface-elevated {
+  background: #141722;
   border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 1rem;
-  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-.glass-panel-interactive:hover {
-  background: rgba(28, 28, 44, 0.75);
-  border-color: rgba(99, 102, 241, 0.4);
-  box-shadow: 0 12px 40px -10px rgba(99, 102, 241, 0.25);
-  transform: translateY(-2px);
+/* Pulsing AI Consensus Animations */
+@keyframes grid-pulse {
+  0%, 100% { opacity: 0.3; transform: scale(0.99); }
+  50% { opacity: 0.8; transform: scale(1); }
 }
 
-.terminal-panel {
-  background: rgba(9, 9, 13, 0.92);
-  backdrop-filter: blur(12px);
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
-  font-family: "JetBrains Mono", "Fira Code", Consolas, monospace;
+.animate-grid-pulse {
+  animation: grid-pulse 2.5s infinite ease-in-out;
 }
 
-.glow-indigo {
-  box-shadow: 0 0 25px rgba(99, 102, 241, 0.3);
+@keyframes scanline {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(100%); }
 }
 
-.glow-purple {
-  box-shadow: 0 0 25px rgba(168, 85, 247, 0.3);
+.animate-scanline {
+  animation: scanline 4s linear infinite;
 }
 
-@keyframes pulse-slow {
-  0%, 100% { opacity: 0.8; transform: scale(1); }
-  50% { opacity: 0.4; transform: scale(0.98); }
+.node-active-glow {
+  box-shadow: 0 0 15px rgba(56, 189, 248, 0.6);
 }
-
-.animate-pulse-slow {
-  animation: pulse-slow 3s infinite ease-in-out;
+.node-success-glow {
+  box-shadow: 0 0 15px rgba(16, 185, 129, 0.6);
 }
