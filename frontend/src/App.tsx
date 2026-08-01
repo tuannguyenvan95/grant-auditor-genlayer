@@ -45,7 +45,7 @@ declare global {
 }
 
 // GenLayer Contract Address for GrantAuditor
-const CONTRACT_ADDRESS = import.meta.env.VITE_CONTRACT_ADDRESS || '0x25447Bbb621bC4a1A98f900d7084fB9789218152';
+const CONTRACT_ADDRESS = import.meta.env.VITE_CONTRACT_ADDRESS || '0x6eFd21F37657F7bAe955Efde0190838cfF2949F1';
 const EXPLORER_BASE_URL = "https://explorer-studio.genlayer.com";
 
 type VerdictStatus = 'PENDING' | 'SUBMITTED' | 'APPROVED' | 'PARTIAL' | 'CUT' | 'ESCALATED';
@@ -348,8 +348,13 @@ export function App() {
     const sum = raw.reduce((a, b) => a + b, 0);
     if (raw.length === 0 || sum === 0) return { percentages: [100], amounts: [total] };
     
-    // Normalize to 100% or calculate amounts directly
-    const amounts = raw.map(p => Math.round((p / sum) * total));
+    const amounts = raw.map(p => Number(((p / sum) * total).toFixed(4)));
+    const sumAmounts = amounts.reduce((a,b)=>a+b,0);
+    if (amounts.length > 0) {
+        amounts[amounts.length - 1] += (total - sumAmounts);
+        amounts[amounts.length - 1] = Number(amounts[amounts.length - 1].toFixed(4));
+    }
+    
     const percentages = raw.map(p => Math.round((p / sum) * 100));
     return { percentages, amounts };
   };
@@ -369,9 +374,8 @@ export function App() {
       const { percentages, amounts } = parsePercentageSplits(newTotalBudget, newSplits);
       const titleArr = newTitles.split(",").map(s => s.trim());
       const totalGen = amounts.reduce((a, b) => a + b, 0);
-      
       const WEI_MULTIPLIER = 1000000000000000000n; // 1e18
-      const amountsInWei = amounts.map(a => BigInt(a) * WEI_MULTIPLIER);
+      const amountsInWei = amounts.map(a => BigInt(Math.round(a * 10000)) * (WEI_MULTIPLIER / 10000n));
       const amountsString = amountsInWei.map(v => v.toString()).join(",");
       const targetGrantee = newGrantee || account || "0xb10E...DevGuild";
 
@@ -380,7 +384,7 @@ export function App() {
         addLog("Broadcasting create_grant transaction to GenLayer Studionet RPC...", "TX");
         // FIX #3: Contract compares gl.msg.value against raw integer (e.g. 2000),
         // NOT wei (2000 * 1e18). Send value in contract's native unit.
-        const contractValue = BigInt(totalGen) * WEI_MULTIPLIER;
+        const contractValue = amountsInWei.reduce((a, b) => a + b, 0n);
         const encodedUrl = `${newTitle || "Custom DAO Initiative"}|||${newProposalUrl}`;
         txHash = await client.writeContract({
           address: CONTRACT_ADDRESS as `0x${string}`,
@@ -500,7 +504,7 @@ export function App() {
         const txHash = await client.writeContract({
           address: CONTRACT_ADDRESS as `0x${string}`,
           functionName: 'submit_evidence',
-          args: [contractGrantId, contractMilestoneId, `${report}\n[Evidence URL]: ${url}`],
+          args: [contractGrantId, contractMilestoneId, url],
           value: 0n,
           // eslint-disable-next-line @typescript-eslint/ban-ts-comment
           // @ts-ignore
@@ -515,15 +519,16 @@ export function App() {
         
         // eslint-disable-next-line @typescript-eslint/ban-ts-comment
         // @ts-ignore
-        const hasError = receipt?.data?.validators?.some(
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (v: any) => v.execution_result === 'ERROR'
-        );
+        const rcpt = receipt as any;
+        const hasError = rcpt?.status === 0 || rcpt?.status_name === 'REJECTED' || (rcpt?.data?.validators?.some((v: any) => v.execution_result === 'ERROR'));
         if (hasError) {
-          // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-          // @ts-ignore
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const errorMsg = receipt?.data?.validators?.find((v: any) => v.execution_result === 'ERROR')?.genvm_result?.stderr || 'Transaction failed in GenVM execution.';
+          let errorMsg = 'Transaction failed or rejected by consensus.';
+          if (rcpt?.status_name === 'REJECTED') {
+            errorMsg = 'Transaction REJECTED by GenLayer consensus. Validators disagreed.';
+          } else {
+            const vError = rcpt?.data?.validators?.find((v: any) => v.execution_result === 'ERROR')?.genvm_result?.stderr;
+            if (vError) errorMsg = vError;
+          }
           throw new Error(errorMsg);
         }
 
@@ -621,14 +626,17 @@ export function App() {
         // GenLayer specific error check
         // eslint-disable-next-line @typescript-eslint/ban-ts-comment
         // @ts-ignore
-        const hasError = receipt?.data?.validators?.some(
-          (v: any) => v.execution_result === 'ERROR'
-        );
-
+        const rcpt = receipt as any;
+        const hasError = rcpt?.status === 0 || rcpt?.status_name === 'REJECTED' || (rcpt?.data?.validators?.some((v: any) => v.execution_result === 'ERROR'));
+        
         if (hasError) {
-          // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-          // @ts-ignore
-          const errorMsg = receipt?.data?.validators?.find((v: any) => v.execution_result === 'ERROR')?.genvm_result?.stderr || 'Transaction failed in GenVM execution.';
+          let errorMsg = 'Transaction failed or rejected by consensus.';
+          if (rcpt?.status_name === 'REJECTED') {
+            errorMsg = 'Transaction REJECTED by GenLayer consensus. Validators disagreed.';
+          } else {
+            const vError = rcpt?.data?.validators?.find((v: any) => v.execution_result === 'ERROR')?.genvm_result?.stderr;
+            if (vError) errorMsg = vError;
+          }
           throw new Error(errorMsg);
         }
 
