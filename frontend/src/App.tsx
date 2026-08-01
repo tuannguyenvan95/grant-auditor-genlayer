@@ -231,15 +231,22 @@ export function App() {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const onChainGrants: Grant[] = onChainData.map((c: any) => {
           const totalAmt = Number(BigInt(c.total_amount) / WEI_MULTIPLIER);
-          return {
-            grantId: `#VAULT-OC-${String(c.id).padStart(4, '0')}`,
-            onChainId: String(c.id),
-            title: `On-Chain Initiative #${c.id}`,
-            category: "On-Chain Deployed",
-            funder: c.funder,
-            grantee: c.grantee,
-            proposalUrl: c.proposal_url,
-            totalAmount: totalAmt,
+            let title = `On-Chain Initiative #${c.id}`;
+            let propUrl = c.proposal_url;
+            if (c.proposal_url && c.proposal_url.includes('|||')) {
+              const parts = c.proposal_url.split('|||');
+              title = parts[0];
+              propUrl = parts[1];
+            }
+            return {
+              grantId: `#VAULT-OC-${String(c.id).padStart(4, '0')}`,
+              onChainId: String(c.id),
+              title: title,
+              category: "On-Chain Deployed",
+              funder: c.funder,
+              grantee: c.grantee,
+              proposalUrl: propUrl,
+              totalAmount: totalAmt,
             isSettled: c.status === "CLOSED",
             createdAt: "Synced from GenLayer",
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -374,10 +381,11 @@ export function App() {
         // FIX #3: Contract compares gl.msg.value against raw integer (e.g. 2000),
         // NOT wei (2000 * 1e18). Send value in contract's native unit.
         const contractValue = BigInt(totalGen) * WEI_MULTIPLIER;
+        const encodedUrl = `${newTitle || "Custom DAO Initiative"}|||${newProposalUrl}`;
         txHash = await client.writeContract({
           address: CONTRACT_ADDRESS as `0x${string}`,
           functionName: 'create_grant',
-          args: [targetGrantee, newProposalUrl, amountsString],
+          args: [targetGrantee, encodedUrl, amountsString],
           value: contractValue,
           // eslint-disable-next-line @typescript-eslint/ban-ts-comment
           // @ts-ignore
@@ -503,10 +511,26 @@ export function App() {
         });
         // eslint-disable-next-line @typescript-eslint/ban-ts-comment
         // @ts-ignore
-        await client.waitForTransactionReceipt({ hash: txHash });
+        const receipt = await client.waitForTransactionReceipt({ hash: txHash });
+        
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore
+        const hasError = receipt?.data?.validators?.some(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (v: any) => v.execution_result === 'ERROR'
+        );
+        if (hasError) {
+          // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+          // @ts-ignore
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const errorMsg = receipt?.data?.validators?.find((v: any) => v.execution_result === 'ERROR')?.genvm_result?.stderr || 'Transaction failed in GenVM execution.';
+          throw new Error(errorMsg);
+        }
+
         addLog(`Evidence submission mined! TX: ${txHash}`, "SUCCESS", txHash);
       } catch (err: unknown) {
-        addLog("Synchronized deliverable proof in workstation testnet environment.", "INFO");
+        addLog(`Error submitting evidence: ${(err as Error).message}`, "ERROR");
+        return; // DONT update local state if on-chain failed!
       }
 
       setGrants(prev => prev.map(g => {

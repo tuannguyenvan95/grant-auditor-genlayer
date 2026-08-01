@@ -4,6 +4,9 @@ from genlayer import *
 import json
 from dataclasses import dataclass
 
+class UserError(Exception):
+    pass
+
 @allow_storage
 @dataclass
 class Milestone:
