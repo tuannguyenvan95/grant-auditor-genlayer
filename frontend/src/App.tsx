@@ -308,6 +308,26 @@ export function App() {
     addLog("Initializing GrantAuditor AI Nondeterministic Workstation...", "INFO");
     addLog(`Connected to Studionet escrow contract: ${CONTRACT_ADDRESS}`, "SUCCESS");
     addLog("4-Outcome Adjudication Engine (RELEASE, PARTIAL, CUT, ESCALATE) online.", "VERDICT");
+
+    // Auto-reconnect wallet if already authorized
+    const checkWallet = async () => {
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
+      if (typeof window !== 'undefined' && window.ethereum) {
+        try {
+          // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+          // @ts-ignore
+          const accounts = await window.ethereum.request({ method: 'eth_accounts' });
+          if (accounts && accounts.length > 0) {
+            setAccount(accounts[0]);
+            addLog(`Wallet auto-reconnected: ${accounts[0].substring(0, 6)}...${accounts[0].substring(38)}`, "SUCCESS");
+          }
+        } catch (e) {
+          console.error("Auto-reconnect failed", e);
+        }
+      }
+    };
+    checkWallet();
   }, []);
 
   useEffect(() => {
