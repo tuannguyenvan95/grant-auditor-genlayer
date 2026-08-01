@@ -740,10 +740,16 @@ export function App() {
       <header className="sticky top-0 z-50 bg-[#0a0d14]/92 backdrop-blur-xl border-b border-zinc-800/80 px-6 py-3 flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center space-x-5">
           <div className="flex items-center space-x-3">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-cyan-500 via-indigo-600 to-emerald-500 p-[1px] shadow-lg shadow-cyan-500/20">
-              <div className="w-full h-full bg-[#0a0d14] rounded-[11px] flex items-center justify-center">
-                <Shield className="w-5 h-5 text-cyan-400" />
-              </div>
+            <div className="w-9 h-9 flex items-center justify-center">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="drop-shadow-[0_0_8px_rgba(168,85,247,0.4)]">
+                <path d="M12.983 2L3 13.064H11.082L8.983 22L19.966 10.936H11.884L13.983 2Z" fill="url(#genlayer-grad-header)"/>
+                <defs>
+                  <linearGradient id="genlayer-grad-header" x1="3" y1="2" x2="19.966" y2="22" gradientUnits="userSpaceOnUse">
+                    <stop stopColor="#A855F7"/>
+                    <stop offset="1" stopColor="#3B82F6"/>
+                  </linearGradient>
+                </defs>
+              </svg>
             </div>
             <div>
               <div className="flex items-center space-x-2.5">
@@ -1524,9 +1530,15 @@ export function App() {
             {/* Col 1: Protocol Mission */}
             <div className="space-y-3">
               <div className="flex items-center space-x-2.5">
-                <div className="w-7 h-7 rounded-lg bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400 font-black shadow-inner">
-                  <Shield className="w-4 h-4 text-cyan-400" />
-                </div>
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M12.983 2L3 13.064H11.082L8.983 22L19.966 10.936H11.884L13.983 2Z" fill="url(#genlayer-grad-footer)"/>
+                  <defs>
+                    <linearGradient id="genlayer-grad-footer" x1="3" y1="2" x2="19.966" y2="22" gradientUnits="userSpaceOnUse">
+                      <stop stopColor="#A855F7"/>
+                      <stop offset="1" stopColor="#3B82F6"/>
+                    </linearGradient>
+                  </defs>
+                </svg>
                 <span className="font-black text-white uppercase tracking-wider text-sm">GrantAuditor Protocol</span>
               </div>
               <p className="text-[12px] font-sans text-zinc-400 leading-relaxed">
