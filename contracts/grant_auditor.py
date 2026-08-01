@@ -152,20 +152,20 @@ class Contract(gl.Contract):
         if verdict == "RELEASE":
             payout_amount = amount
             ms.status = "APPROVED"
-            # gl.get_contract_at(gl.current_contract_address).emit_transfer(grant.grantee, amount)
+            gl.get_contract_at(grant.grantee).emit_transfer(value=amount)
         elif verdict == "PARTIAL":
             half = amount // bigint(2)
             rem = amount - half
             payout_amount = half
             ms.status = "PARTIAL"
             if half > bigint(0):
-                pass # gl.get_contract_at(gl.current_contract_address).emit_transfer(grant.grantee, half)
+                gl.get_contract_at(grant.grantee).emit_transfer(value=half)
             if rem > bigint(0):
-                pass # gl.get_contract_at(gl.current_contract_address).emit_transfer(grant.funder, rem)
+                gl.get_contract_at(grant.funder).emit_transfer(value=rem)
         elif verdict == "CUT":
             payout_amount = bigint(0)
             ms.status = "CUT"
-            # gl.get_contract_at(gl.current_contract_address).emit_transfer(grant.funder, amount)
+            gl.get_contract_at(grant.funder).emit_transfer(value=amount)
         else:
             verdict = "ESCALATE"
             ms.status = "ESCALATED"
