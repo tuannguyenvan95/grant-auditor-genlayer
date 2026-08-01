@@ -618,8 +618,8 @@ export function App() {
         }
       } catch (err: unknown) {
         addLog(`[Error] Adjudication failed: ${(err as Error).message || 'Unknown error'}`, "ERROR");
-        setActiveStep(0);
-        setIsAdjudicating(false);
+        setActiveStepText("");
+        setAdjudicatingKey(null);
         return;
       }
 
