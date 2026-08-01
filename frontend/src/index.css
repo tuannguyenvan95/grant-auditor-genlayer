@@ -2,13 +2,15 @@
 
 @layer base {
   :root {
-    --bg-app: #08090d;
+    --bg-app: #07090f;
     --bg-surface: #0e1118;
     --bg-elevated: #151822;
     --border-subtle: rgba(255, 255, 255, 0.07);
     --border-active: rgba(56, 189, 248, 0.35);
-    --cyan-glow: rgba(56, 189, 248, 0.15);
-    --emerald-glow: rgba(16, 185, 129, 0.15);
+    --cyan-glow: rgba(56, 189, 248, 0.18);
+    --emerald-glow: rgba(16, 185, 129, 0.18);
+    --rose-glow: rgba(244, 63, 94, 0.18);
+    --amber-glow: rgba(245, 158, 11, 0.18);
   }
 
   body {
@@ -30,15 +32,15 @@
 
 /* Custom scrollbars for slick workstation layout */
 ::-webkit-scrollbar {
-  width: 5px;
-  height: 5px;
+  width: 6px;
+  height: 6px;
 }
 ::-webkit-scrollbar-track {
   background: #08090d;
 }
 ::-webkit-scrollbar-thumb {
   background: #1e2230;
-  border-radius: 2px;
+  border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
   background: #31374a;
@@ -46,52 +48,66 @@
 
 /* Architectural Workstation Design Tokens */
 .workbench-card {
-  background: rgba(14, 17, 24, 0.75);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  border-radius: 0.85rem;
-  box-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.45);
+  background: rgba(13, 16, 25, 0.82);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0.95rem;
+  box-shadow: 0 12px 35px -5px rgba(0, 0, 0, 0.55);
   transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .workbench-card:hover {
-  border-color: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.16);
 }
 
 .workbench-card-active {
-  background: rgba(18, 22, 32, 0.9);
-  border: 1px solid rgba(56, 189, 248, 0.4);
-  box-shadow: 0 0 25px -5px rgba(56, 189, 248, 0.25);
+  background: rgba(18, 22, 34, 0.95);
+  border: 1px solid rgba(56, 189, 248, 0.5);
+  box-shadow: 0 0 30px -5px rgba(56, 189, 248, 0.28);
 }
 
 .surface-elevated {
   background: #141722;
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.07);
 }
 
 /* Pulsing AI Consensus Animations */
 @keyframes grid-pulse {
   0%, 100% { opacity: 0.3; transform: scale(0.99); }
-  50% { opacity: 0.8; transform: scale(1); }
+  50% { opacity: 0.85; transform: scale(1); }
 }
 
 .animate-grid-pulse {
   animation: grid-pulse 2.5s infinite ease-in-out;
 }
 
-@keyframes scanline {
-  0% { transform: translateY(-100%); }
-  100% { transform: translateY(100%); }
+@keyframes float-gentle {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-4px); }
 }
 
-.animate-scanline {
-  animation: scanline 4s linear infinite;
+.animate-float {
+  animation: float-gentle 4s ease-in-out infinite;
 }
 
 .node-active-glow {
-  box-shadow: 0 0 15px rgba(56, 189, 248, 0.6);
+  box-shadow: 0 0 18px rgba(56, 189, 248, 0.65);
 }
 .node-success-glow {
-  box-shadow: 0 0 15px rgba(16, 185, 129, 0.6);
+  box-shadow: 0 0 18px rgba(16, 185, 129, 0.65);
+}
+
+/* Chat bubble styling for Bot Oracle */
+.chat-bubble-user {
+  background: linear-gradient(135deg, rgba(14, 116, 144, 0.4), rgba(30, 58, 138, 0.4));
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  border-radius: 1rem 1rem 0.2rem 1rem;
+}
+
+.chat-bubble-bot {
+  background: rgba(20, 24, 38, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 1rem 1rem 1rem 0.2rem;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
 }
