@@ -859,10 +859,10 @@ export function App() {
         </div>
       )}
 
-      {/* Main Studio / Split Workstation Layout - Edge to Edge Widescreen Utilization */}
-      <div className="flex-1 flex flex-col lg:flex-row overflow-hidden relative w-full">
-        {/* Left Pane: Escrow Registry Sidebar */}
-        <div className="w-full lg:w-[380px] xl:w-[440px] 2xl:w-[480px] border-r border-zinc-800/80 flex flex-col bg-[#0b0d14]/85 flex-shrink-0">
+      {/* Main Studio / Split Workstation Layout - Balanced Institutional Design */}
+      <div className="flex-1 flex flex-col lg:flex-row w-full max-w-[2200px] mx-auto min-h-[850px]">
+        {/* Left Pane: Escrow Registry & Quorum Health Desk */}
+        <div className="w-full lg:w-[360px] xl:w-[400px] 2xl:w-[440px] border-r border-zinc-800/80 flex flex-col bg-[#0b0d14]/85 flex-shrink-0 lg:sticky lg:top-[80px] lg:max-h-[calc(100vh-80px)] overflow-y-auto">
           <div className="p-5 border-b border-zinc-800/80 space-y-4">
             <div className="flex items-center justify-between text-xs font-mono">
               <span className="font-extrabold uppercase tracking-wider text-zinc-200 flex items-center space-x-2 text-sm">
@@ -1001,11 +1001,44 @@ export function App() {
               })
             )}
           </div>
+
+          {/* Live Studionet AI Validator Quorum Health Desk */}
+          <div className="p-5 border-t border-zinc-800/80 bg-[#0c0f1a] space-y-3.5 font-mono text-xs mt-auto">
+            <div className="flex items-center justify-between">
+              <span className="text-zinc-200 font-extrabold flex items-center space-x-2 text-xs uppercase tracking-wider">
+                <Cpu className="w-4 h-4 text-emerald-400 animate-pulse" />
+                <span>Nondet Quorum Status</span>
+              </span>
+              <span className="text-[11px] text-emerald-400 font-extrabold px-2.5 py-0.5 rounded-md bg-emerald-950/80 border border-emerald-800 shadow-sm">
+                9 / 9 ONLINE
+              </span>
+            </div>
+            <p className="text-[11px] text-zinc-400 font-sans leading-relaxed">
+              9 headless Chromium AI consensus nodes actively verifying web DOM evidence and executing token state transitions on Studionet.
+            </p>
+            <div className="grid grid-cols-3 gap-2">
+              {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((node) => (
+                <div key={node} className="p-2 rounded-lg bg-zinc-900/90 border border-zinc-800 flex flex-col items-center justify-center space-y-1 shadow-inner">
+                  <div className="flex items-center space-x-1.5">
+                    <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></div>
+                    <span className="text-[10px] text-zinc-300 font-black">NODE #{node}</span>
+                  </div>
+                  <span className="text-[9px] text-cyan-400 font-extrabold">BFT: 100%</span>
+                </div>
+              ))}
+            </div>
+            <div className="pt-2 border-t border-zinc-800/60 flex items-center justify-between text-[11px] text-zinc-400 font-bold">
+              <span>Consensus Engine:</span>
+              <span className="text-cyan-300 font-black flex items-center">
+                <Sparkles className="w-3 h-3 mr-1 text-cyan-400" /> gl.nondet v2
+              </span>
+            </div>
+          </div>
         </div>
 
         {/* Right Pane: Main Adjudication Theater & Milestone Courtroom */}
-        <div className="flex-1 flex flex-col overflow-y-auto bg-[#07090f] p-6 sm:p-8 xl:p-10 w-full">
-          <div className="w-full max-w-[1750px] mx-auto space-y-8">
+        <div className="flex-1 flex flex-col bg-[#07090f] p-6 sm:p-8 xl:p-12 w-full min-w-0">
+          <div className="w-full max-w-[1700px] mx-auto space-y-8 pb-12">
             {/* Top Vault Summary Deck */}
             <div className="workbench-card p-8 border-zinc-800/90 relative overflow-hidden shadow-2xl">
               <div className="absolute top-0 right-0 w-96 h-96 bg-gradient-to-bl from-cyan-500/15 via-indigo-500/10 to-transparent rounded-bl-full pointer-events-none"></div>
@@ -1395,97 +1428,99 @@ export function App() {
                 })}
               </div>
             </div>
-
-            {/* Institutional Cyber-Slate Executive Footer */}
-            <footer className="mt-20 pt-10 border-t border-zinc-800/90 font-mono text-xs text-zinc-400">
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-8 pb-10">
-                {/* Col 1: Protocol Mission */}
-                <div className="space-y-3">
-                  <div className="flex items-center space-x-2.5">
-                    <div className="w-7 h-7 rounded-lg bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400 font-black shadow-inner">
-                      <Shield className="w-4 h-4 text-cyan-400" />
-                    </div>
-                    <span className="font-black text-white uppercase tracking-wider text-sm">GrantAuditor Protocol</span>
-                  </div>
-                  <p className="text-[12px] font-sans text-zinc-400 leading-relaxed">
-                    Decentralized autonomous milestone adjudication powered by GenLayer’s Nondeterministic AI Consensus. Eliminating human committees, political favoritism, and oracle latency with true on-chain token settlement.
-                  </p>
-                </div>
-
-                {/* Col 2: On-Chain Verification */}
-                <div className="space-y-2.5">
-                  <span className="font-extrabold text-white text-xs uppercase tracking-wider block border-l-2 border-cyan-400 pl-2.5">On-Chain Contracts & Network</span>
-                  <div className="space-y-1.5 font-mono text-[11px]">
-                    <a
-                      href={`${EXPLORER_BASE_URL}/address/${CONTRACT_ADDRESS}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="flex items-center space-x-1.5 text-cyan-400 hover:text-cyan-300 hover:underline"
-                    >
-                      <span>Contract: {CONTRACT_ADDRESS.slice(0, 10)}...{CONTRACT_ADDRESS.slice(-6)}</span>
-                      <ExternalLink className="w-3.5 h-3.5 flex-shrink-0" />
-                    </a>
-                    <div className="text-zinc-300">RPC Endpoint: <span className="text-emerald-400 font-bold">GenLayer Studionet (Chain 61999)</span></div>
-                    <div className="text-zinc-400">VM Architecture: <span className="text-indigo-300 font-semibold">gl.nondet v0.2.16 (BFT Quorum)</span></div>
-                  </div>
-                </div>
-
-                {/* Col 3: Ecosystem & Socials */}
-                <div className="space-y-2.5">
-                  <span className="font-extrabold text-white text-xs uppercase tracking-wider block border-l-2 border-indigo-400 pl-2.5">Ecosystem & Community Guilds</span>
-                  <div className="grid grid-cols-2 gap-2 text-[11px] font-mono font-bold">
-                    <a href="https://github.com/tuannguyenvan95/grant-auditor-genlayer" target="_blank" rel="noreferrer" className="p-2 rounded-lg bg-zinc-900/80 hover:bg-zinc-800 border border-zinc-800 flex items-center space-x-2 text-zinc-300 hover:text-cyan-300 transition-colors">
-                      <GitPullRequest className="w-3.5 h-3.5 text-cyan-400" />
-                      <span>GitHub Repo</span>
-                    </a>
-                    <a href="https://twitter.com/genlayer" target="_blank" rel="noreferrer" className="p-2 rounded-lg bg-zinc-900/80 hover:bg-zinc-800 border border-zinc-800 flex items-center space-x-2 text-zinc-300 hover:text-cyan-300 transition-colors">
-                      <Share2 className="w-3.5 h-3.5 text-indigo-400" />
-                      <span>X (Twitter)</span>
-                    </a>
-                    <a href="https://discord.gg/genlayer" target="_blank" rel="noreferrer" className="p-2 rounded-lg bg-zinc-900/80 hover:bg-zinc-800 border border-zinc-800 flex items-center space-x-2 text-zinc-300 hover:text-cyan-300 transition-colors">
-                      <MessageSquare className="w-3.5 h-3.5 text-emerald-400" />
-                      <span>Discord Guild</span>
-                    </a>
-                    <a href="https://docs.genlayer.com" target="_blank" rel="noreferrer" className="p-2 rounded-lg bg-zinc-900/80 hover:bg-zinc-800 border border-zinc-800 flex items-center space-x-2 text-zinc-300 hover:text-cyan-300 transition-colors">
-                      <BookOpen className="w-3.5 h-3.5 text-amber-400" />
-                      <span>Documentation</span>
-                    </a>
-                  </div>
-                </div>
-
-                {/* Col 4: Builder Program Badge & Support */}
-                <div className="space-y-3">
-                  <span className="font-extrabold text-white text-xs uppercase tracking-wider block border-l-2 border-emerald-400 pl-2.5">Hackathon & Governance</span>
-                  <div className="p-3.5 rounded-xl bg-gradient-to-br from-[#101624] via-[#0d121c] to-[#0a0d16] border border-cyan-500/30 shadow-md space-y-2">
-                    <div className="flex items-center justify-between text-[11px] text-cyan-300 font-extrabold uppercase tracking-wide">
-                      <span>GenLayer Builder Program</span>
-                      <ShieldCheck className="w-4 h-4 text-emerald-400" />
-                    </div>
-                    <p className="text-[11px] font-sans text-zinc-400">
-                      Engineered for high-stakes decentralized grant adjudication with verifiable LLM execution.
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Bottom Copyright Bar */}
-              <div className="pt-6 border-t border-zinc-900 flex flex-col sm:flex-row items-center justify-between gap-4 text-[11px] font-sans text-zinc-400">
-                <div>
-                  © 2026 <strong className="text-white font-semibold">GrantAuditor Protocol Foundation</strong>. All rights reserved. Open-source under MIT License.
-                </div>
-                <div className="flex items-center space-x-4 font-mono">
-                  <span className="text-emerald-400 font-bold flex items-center">
-                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse mr-1.5"></span>
-                    Operational on Studionet
-                  </span>
-                  <span>•</span>
-                  <span className="text-cyan-400 font-semibold">gl.nondet v2 AI Tribunal</span>
-                </div>
-              </div>
-            </footer>
           </div>
         </div>
       </div>
+
+      {/* Institutional 100% Full-Width Executive Footer (Symmetrical Edge-to-Edge Design) */}
+      <footer className="w-full bg-[#05070d] border-t border-zinc-800/90 font-mono text-xs text-zinc-400 px-6 sm:px-10 xl:px-16 pt-14 pb-28 shadow-2xl">
+        <div className="max-w-[2000px] mx-auto">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-10 pb-12">
+            {/* Col 1: Protocol Mission */}
+            <div className="space-y-3">
+              <div className="flex items-center space-x-2.5">
+                <div className="w-7 h-7 rounded-lg bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400 font-black shadow-inner">
+                  <Shield className="w-4 h-4 text-cyan-400" />
+                </div>
+                <span className="font-black text-white uppercase tracking-wider text-sm">GrantAuditor Protocol</span>
+              </div>
+              <p className="text-[12px] font-sans text-zinc-400 leading-relaxed">
+                Decentralized autonomous milestone adjudication powered by GenLayer’s Nondeterministic AI Consensus. Eliminating human committees, political favoritism, and oracle latency with true on-chain token settlement.
+              </p>
+            </div>
+
+            {/* Col 2: On-Chain Verification */}
+            <div className="space-y-2.5">
+              <span className="font-extrabold text-white text-xs uppercase tracking-wider block border-l-2 border-cyan-400 pl-2.5">On-Chain Contracts & Network</span>
+              <div className="space-y-1.5 font-mono text-[11px]">
+                <a
+                  href={`${EXPLORER_BASE_URL}/address/${CONTRACT_ADDRESS}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center space-x-1.5 text-cyan-400 hover:text-cyan-300 hover:underline"
+                >
+                  <span>Contract: {CONTRACT_ADDRESS.slice(0, 10)}...{CONTRACT_ADDRESS.slice(-6)}</span>
+                  <ExternalLink className="w-3.5 h-3.5 flex-shrink-0" />
+                </a>
+                <div className="text-zinc-300">RPC Endpoint: <span className="text-emerald-400 font-bold">GenLayer Studionet (Chain 61999)</span></div>
+                <div className="text-zinc-400">VM Architecture: <span className="text-indigo-300 font-semibold">gl.nondet v0.2.16 (BFT Quorum)</span></div>
+              </div>
+            </div>
+
+            {/* Col 3: Ecosystem & Socials */}
+            <div className="space-y-2.5">
+              <span className="font-extrabold text-white text-xs uppercase tracking-wider block border-l-2 border-indigo-400 pl-2.5">Ecosystem & Community Guilds</span>
+              <div className="grid grid-cols-2 gap-2 text-[11px] font-mono font-bold">
+                <a href="https://github.com/tuannguyenvan95/grant-auditor-genlayer" target="_blank" rel="noreferrer" className="p-2 rounded-lg bg-zinc-900/80 hover:bg-zinc-800 border border-zinc-800 flex items-center space-x-2 text-zinc-300 hover:text-cyan-300 transition-colors shadow-sm">
+                  <GitPullRequest className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>GitHub Repo</span>
+                </a>
+                <a href="https://twitter.com/genlayer" target="_blank" rel="noreferrer" className="p-2 rounded-lg bg-zinc-900/80 hover:bg-zinc-800 border border-zinc-800 flex items-center space-x-2 text-zinc-300 hover:text-cyan-300 transition-colors shadow-sm">
+                  <Share2 className="w-3.5 h-3.5 text-indigo-400" />
+                  <span>X (Twitter)</span>
+                </a>
+                <a href="https://discord.gg/genlayer" target="_blank" rel="noreferrer" className="p-2 rounded-lg bg-zinc-900/80 hover:bg-zinc-800 border border-zinc-800 flex items-center space-x-2 text-zinc-300 hover:text-cyan-300 transition-colors shadow-sm">
+                  <MessageSquare className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Discord Guild</span>
+                </a>
+                <a href="https://docs.genlayer.com" target="_blank" rel="noreferrer" className="p-2 rounded-lg bg-zinc-900/80 hover:bg-zinc-800 border border-zinc-800 flex items-center space-x-2 text-zinc-300 hover:text-cyan-300 transition-colors shadow-sm">
+                  <BookOpen className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Documentation</span>
+                </a>
+              </div>
+            </div>
+
+            {/* Col 4: Builder Program Badge & Support */}
+            <div className="space-y-3">
+              <span className="font-extrabold text-white text-xs uppercase tracking-wider block border-l-2 border-emerald-400 pl-2.5">Hackathon & Governance</span>
+              <div className="p-4 rounded-xl bg-gradient-to-br from-[#101624] via-[#0d121c] to-[#0a0d16] border border-cyan-500/30 shadow-md space-y-2.5">
+                <div className="flex items-center justify-between text-xs text-cyan-300 font-black uppercase tracking-wide">
+                  <span>GenLayer Builder Program</span>
+                  <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                </div>
+                <p className="text-[11px] font-sans text-zinc-400 leading-relaxed">
+                  Engineered for high-stakes decentralized grant adjudication with verifiable LLM execution.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Bottom Copyright Bar */}
+          <div className="pt-8 border-t border-zinc-900/90 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs font-sans text-zinc-400">
+            <div>
+              © 2026 <strong className="text-white font-semibold">GrantAuditor Protocol Foundation</strong>. All rights reserved. Open-source under MIT License.
+            </div>
+            <div className="flex items-center space-x-4 font-mono">
+              <span className="text-emerald-400 font-bold flex items-center">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse mr-1.5"></span>
+                Operational on Studionet
+              </span>
+              <span>•</span>
+              <span className="text-cyan-400 font-semibold">gl.nondet v2 AI Tribunal</span>
+            </div>
+          </div>
+        </div>
+      </footer>
 
       {/* Floating GrantAuditor AI Oracle Bot Button & Chat Drawer */}
       <div className="fixed bottom-6 right-6 z-50">
