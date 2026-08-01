@@ -16,8 +16,8 @@ class Milestone:
 @dataclass
 class Grant:
     id: str
-    funder: Address
-    grantee: Address
+    funder: str
+    grantee: str
     proposal_url: str
     total_amount: bigint
     num_milestones: bigint
@@ -33,8 +33,8 @@ class Contract(gl.Contract):
         self.next_grant_id = bigint(1)
 
     @gl.public.write.payable
-    def create_grant(self, grantee: Address, proposal_url: str, milestone_amounts_str: str) -> str:
-        funder = Address(gl.message.sender_address)
+    def create_grant(self, grantee: str, proposal_url: str, milestone_amounts_str: str) -> str:
+        funder = str(gl.message.sender_address)
         
         # Parse milestone amounts (supports comma-separated "100,200" or JSON array "[100, 200]")
         try:

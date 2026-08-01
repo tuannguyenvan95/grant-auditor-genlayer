@@ -394,23 +394,16 @@ export function App() {
         
         // eslint-disable-next-line @typescript-eslint/ban-ts-comment
         // @ts-ignore        // GenLayer specific error check (nodes may ACCEPT the tx but GenVM might fail)
-        const hasError = receipt?.data?.validators?.some(
-          (v: any) => v.execution_result === 'ERROR' || v.data?.leader_error != null || (v.data?.result && typeof v.data.result === 'string' && JSON.parse(v.data.result).error)
-        );
+        const isError = receipt?.data?.execution_result === 'ERROR' || 
+                        receipt?.data?.leader_error != null || 
+                        (receipt?.data?.result && typeof receipt.data.result === 'string' && receipt.data.result.includes('"error"'));
 
-        if (hasError) {
-          // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-          // @ts-ignore
-          const failingVal = receipt?.data?.validators?.find((v: any) => v.execution_result === 'ERROR' || v.data?.leader_error != null || (v.data?.result && typeof v.data.result === 'string' && JSON.parse(v.data.result).error));
-          
+        if (isError) {
           let errorMsg = 'Transaction failed in GenVM execution.';
-          if (failingVal) {
-             if (failingVal.genvm_result?.stderr) errorMsg = failingVal.genvm_result.stderr;
-             else if (failingVal.data?.leader_error) errorMsg = failingVal.data.leader_error;
-             else if (failingVal.data?.result && typeof failingVal.data.result === 'string') {
-                 const parsed = JSON.parse(failingVal.data.result);
-                 if (parsed.error?.message) errorMsg = parsed.error.message;
-             }
+          if (receipt?.data?.leader_error) {
+              errorMsg = receipt.data.leader_error;
+          } else if (receipt?.data?.validators?.[0]?.genvm_result?.stderr) {
+              errorMsg = receipt.data.validators[0].genvm_result.stderr;
           }
           throw new Error(errorMsg);
         }
