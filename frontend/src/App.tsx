@@ -400,10 +400,13 @@ export function App() {
 
         if (isError) {
           let errorMsg = 'Transaction failed in GenVM execution.';
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const validators = receipt?.data?.validators as any[] | undefined;
           if (receipt?.data?.leader_error) {
-              errorMsg = receipt.data.leader_error;
-          } else if (receipt?.data?.validators?.[0]?.genvm_result?.stderr) {
-              errorMsg = receipt.data.validators[0].genvm_result.stderr;
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              errorMsg = (receipt.data as any).leader_error as string;
+          } else if (validators && validators.length > 0 && validators[0]?.genvm_result?.stderr) {
+              errorMsg = validators[0].genvm_result.stderr;
           }
           throw new Error(errorMsg);
         }
