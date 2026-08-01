@@ -1092,7 +1092,18 @@ export function App() {
 
         {/* Right Pane: Main Adjudication Theater & Milestone Courtroom */}
         <div className="flex-1 flex flex-col bg-[#07090f] p-6 sm:p-8 xl:p-12 w-full min-w-0">
-          <div className="w-full max-w-[1700px] mx-auto space-y-8 pb-12">
+          {!activeGrant ? (
+            <div className="flex-1 flex flex-col items-center justify-center h-full min-h-[500px]">
+              <div className="w-24 h-24 mb-6 rounded-2xl bg-zinc-900/50 border border-zinc-800/80 flex items-center justify-center shadow-xl">
+                <Shield className="w-10 h-10 text-zinc-600" />
+              </div>
+              <h2 className="text-2xl font-black text-white font-mono uppercase tracking-widest mb-3">No Active Vaults</h2>
+              <p className="text-zinc-500 text-sm max-w-sm text-center leading-relaxed">
+                The smart contract is currently empty. Connect your wallet and collateralize a new escrow vault to get started.
+              </p>
+            </div>
+          ) : (
+            <div className="w-full max-w-[1700px] mx-auto space-y-8 pb-12">
             {/* Top Vault Summary Deck */}
             <div className="workbench-card p-8 border-zinc-800/90 relative overflow-hidden shadow-2xl">
               <div className="absolute top-0 right-0 w-96 h-96 bg-gradient-to-bl from-cyan-500/15 via-indigo-500/10 to-transparent rounded-bl-full pointer-events-none"></div>
@@ -1482,7 +1493,7 @@ export function App() {
                 })}
               </div>
             </div>
-          </div>
+          )}
         </div>
       </div>
 
