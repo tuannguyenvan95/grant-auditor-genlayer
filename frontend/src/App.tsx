@@ -402,7 +402,6 @@ export function App() {
 
       let txHash: string;
       let realOnChainId: string | undefined;
-      try {
         addLog("Broadcasting create_grant transaction to GenLayer Studionet RPC...", "TX");
         // FIX #3: Contract compares gl.msg.value against raw integer (e.g. 2000),
         // NOT wei (2000 * 1e18). Send value in contract's native unit.
@@ -420,9 +419,11 @@ export function App() {
           maxPriorityFeePerGas: 500000000n
         });
         addLog(`Transaction broadcasted! Awaiting block consensus... TX: ${txHash}`, "INFO", txHash);
+        
         // eslint-disable-next-line @typescript-eslint/ban-ts-comment
         // @ts-ignore
         const receipt = await client.waitForTransactionReceipt({ hash: txHash });
+        
         // FIX #1: Extract real on-chain grant ID returned by create_grant
         // eslint-disable-next-line @typescript-eslint/ban-ts-comment
         // @ts-ignore
@@ -432,11 +433,6 @@ export function App() {
           realOnChainId = String(receipt.result);
         }
         addLog(`Vault confirmed on-chain! Escrow collateralized with ${totalGen} GEN (On-chain ID: ${realOnChainId || 'pending'})`, "SUCCESS", txHash);
-      } catch (err: unknown) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        addLog(`RPC note: ${errorMsg.substring(0, 65)}... Synchronizing testnet studio state.`, "INFO");
-        txHash = "0xtx_" + Math.random().toString(16).substring(2, 10) + "...c89a";
-      }
 
       const newVaultId = `#VAULT-${Math.floor(1000 + Math.random() * 9000)}`;
       const newGrant: Grant = {
