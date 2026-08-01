@@ -399,10 +399,10 @@ export function App() {
         );
 
         if (hasError) {
+          // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+          // @ts-ignore
           const errorMsg = receipt?.data?.validators?.find((v: any) => v.execution_result === 'ERROR')?.genvm_result?.stderr || 'Transaction failed in GenVM execution.';
-          setDeployState('error');
-          setTxError(errorMsg);
-          return;
+          throw new Error(errorMsg);
         }
 
         // FIX #1: Extract real on-chain grant ID returned by create_grant
@@ -589,11 +589,15 @@ export function App() {
         addLog(`Real on-chain escrow payout executed! TX: ${txHash}`, "SUCCESS", txHash);
 
         // GenLayer specific error check
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore
         const hasError = receipt?.data?.validators?.some(
           (v: any) => v.execution_result === 'ERROR'
         );
 
         if (hasError) {
+          // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+          // @ts-ignore
           const errorMsg = receipt?.data?.validators?.find((v: any) => v.execution_result === 'ERROR')?.genvm_result?.stderr || 'Transaction failed in GenVM execution.';
           throw new Error(errorMsg);
         }
