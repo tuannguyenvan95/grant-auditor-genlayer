@@ -506,6 +506,12 @@ export function App() {
         // @ts-ignore
         const receipt = await client.waitForTransactionReceipt({ hash: txHash });
         
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore
+        if (receipt && receipt.status === 'reverted') {
+          throw new Error("Transaction reverted on-chain. Check your balance or input data.");
+        }
+
         // FIX #1: Extract real on-chain grant ID returned by create_grant
         // eslint-disable-next-line @typescript-eslint/ban-ts-comment
         // @ts-ignore
