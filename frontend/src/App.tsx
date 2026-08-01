@@ -395,13 +395,23 @@ export function App() {
         // eslint-disable-next-line @typescript-eslint/ban-ts-comment
         // @ts-ignore        // GenLayer specific error check (nodes may ACCEPT the tx but GenVM might fail)
         const hasError = receipt?.data?.validators?.some(
-          (v: any) => v.execution_result === 'ERROR'
+          (v: any) => v.execution_result === 'ERROR' || v.data?.leader_error != null || (v.data?.result && typeof v.data.result === 'string' && JSON.parse(v.data.result).error)
         );
 
         if (hasError) {
           // eslint-disable-next-line @typescript-eslint/ban-ts-comment
           // @ts-ignore
-          const errorMsg = receipt?.data?.validators?.find((v: any) => v.execution_result === 'ERROR')?.genvm_result?.stderr || 'Transaction failed in GenVM execution.';
+          const failingVal = receipt?.data?.validators?.find((v: any) => v.execution_result === 'ERROR' || v.data?.leader_error != null || (v.data?.result && typeof v.data.result === 'string' && JSON.parse(v.data.result).error));
+          
+          let errorMsg = 'Transaction failed in GenVM execution.';
+          if (failingVal) {
+             if (failingVal.genvm_result?.stderr) errorMsg = failingVal.genvm_result.stderr;
+             else if (failingVal.data?.leader_error) errorMsg = failingVal.data.leader_error;
+             else if (failingVal.data?.result && typeof failingVal.data.result === 'string') {
+                 const parsed = JSON.parse(failingVal.data.result);
+                 if (parsed.error?.message) errorMsg = parsed.error.message;
+             }
+          }
           throw new Error(errorMsg);
         }
 

@@ -34,7 +34,7 @@ class Contract(gl.Contract):
 
     @gl.public.write.payable
     def create_grant(self, grantee: Address, proposal_url: str, milestone_amounts_str: str) -> str:
-        funder = gl.message.sender_address
+        funder = Address(gl.message.sender_address)
         
         # Parse milestone amounts (supports comma-separated "100,200" or JSON array "[100, 200]")
         try:
