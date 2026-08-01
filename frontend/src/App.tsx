@@ -328,6 +328,65 @@ export function App() {
       }
     };
     checkWallet();
+
+    // Sync grants from blockchain
+    const syncGrants = async () => {
+      try {
+        const client = getGenLayerClient();
+        const rawJson = await client.readContract({
+          address: CONTRACT_ADDRESS as `0x${string}`,
+          functionName: 'get_all_grants',
+          args: []
+        });
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore
+        const onChainData = JSON.parse(rawJson);
+        const WEI_MULTIPLIER = 1000000000000000000n;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const onChainGrants: Grant[] = onChainData.map((c: any) => {
+          const totalAmt = Number(BigInt(c.total_amount) / WEI_MULTIPLIER);
+          return {
+            grantId: `#VAULT-OC-${String(c.id).padStart(4, '0')}`,
+            onChainId: String(c.id),
+            title: `On-Chain Initiative #${c.id}`,
+            category: "On-Chain Deployed",
+            funder: c.funder,
+            grantee: c.grantee,
+            proposalUrl: c.proposal_url,
+            totalAmount: totalAmt,
+            isSettled: c.status === "CLOSED",
+            createdAt: "Synced from GenLayer",
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            milestones: c.milestones.map((m: any) => {
+              const msAmt = Number(BigInt(m.amount) / WEI_MULTIPLIER);
+              return {
+                id: Number(m.id) + 1,
+                title: `Milestone Tranche #${Number(m.id) + 1} (${Math.round((msAmt / totalAmt) * 100)}%)`,
+                amount: msAmt,
+                percentage: Math.round((msAmt / totalAmt) * 100),
+                status: m.status,
+                progressReport: "",
+                evidenceUrl: m.evidence_url,
+                llmVerdict: m.status === 'PENDING' ? "Awaiting Deliverable Submission" : "See Contract Status",
+                llmReasoning: "Synced from blockchain."
+              };
+            })
+          };
+        });
+        
+        if (onChainGrants.length > 0) {
+          setGrants(prev => {
+            const existingIds = new Set(prev.map(p => p.onChainId).filter(Boolean));
+            const newGrants = onChainGrants.filter(g => !existingIds.has(g.onChainId)).reverse();
+            return [...newGrants, ...prev];
+          });
+          addLog(`Synchronized ${onChainGrants.length} grants from blockchain.`, "SUCCESS");
+        }
+      } catch (e) {
+        console.error("Failed to sync grants", e);
+      }
+    };
+    syncGrants();
   }, []);
 
   useEffect(() => {
@@ -417,7 +476,10 @@ export function App() {
       const { percentages, amounts } = parsePercentageSplits(newTotalBudget, newSplits);
       const titleArr = newTitles.split(",").map(s => s.trim());
       const totalGen = amounts.reduce((a, b) => a + b, 0);
-      const amountsString = amounts.join(",");
+      
+      const WEI_MULTIPLIER = 1000000000000000000n; // 1e18
+      const amountsInWei = amounts.map(a => BigInt(a) * WEI_MULTIPLIER);
+      const amountsString = amountsInWei.map(v => v.toString()).join(",");
       const targetGrantee = newGrantee || account || "0xb10E...DevGuild";
 
       let txHash: string;
@@ -425,7 +487,7 @@ export function App() {
         addLog("Broadcasting create_grant transaction to GenLayer Studionet RPC...", "TX");
         // FIX #3: Contract compares gl.msg.value against raw integer (e.g. 2000),
         // NOT wei (2000 * 1e18). Send value in contract's native unit.
-        const contractValue = BigInt(totalGen);
+        const contractValue = BigInt(totalGen) * WEI_MULTIPLIER;
         txHash = await client.writeContract({
           address: CONTRACT_ADDRESS as `0x${string}`,
           functionName: 'create_grant',
