@@ -1798,7 +1798,7 @@ export function App() {
 
       {/* New Escrow Vault Modal (With Percentage Splits) */}
       {isDeployModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 overflow-y-auto">
+        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/85 backdrop-blur-md p-4 overflow-y-auto">
           <div className="workbench-card max-w-3xl w-full p-8 space-y-7 animate-fadeIn text-left border border-cyan-500/50 shadow-2xl relative my-8 bg-[#0a0e18]">
             <div className="flex items-center justify-between border-b border-zinc-800 pb-5 font-mono">
               <h3 className="text-lg font-black text-white flex items-center space-x-2.5 uppercase tracking-wider">
