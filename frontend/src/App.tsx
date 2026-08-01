@@ -44,7 +44,8 @@ declare global {
   }
 }
 
-const CONTRACT_ADDRESS = import.meta.env.VITE_CONTRACT_ADDRESS || "0x94Ea7A141f70D66BB24C56A9c4B4197fFb7c5030";
+// GenLayer Contract Address for GrantAuditor
+const CONTRACT_ADDRESS = import.meta.env.VITE_CONTRACT_ADDRESS || '0xCa09a3B1a6442E80d98247a2314FA9E95d984bB1';
 const EXPLORER_BASE_URL = "https://genlayer-explorer.vercel.app";
 
 type VerdictStatus = 'PENDING' | 'SUBMITTED' | 'APPROVED' | 'PARTIAL' | 'CUT' | 'ESCALATED';
@@ -392,9 +393,16 @@ export function App() {
         const receipt = await client.waitForTransactionReceipt({ hash: txHash });
         
         // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-        // @ts-ignore
-        if (receipt && receipt.status === 'reverted') {
-          throw new Error("Transaction reverted on-chain. Check your balance or input data.");
+        // @ts-ignore        // GenLayer specific error check (nodes may ACCEPT the tx but GenVM might fail)
+        const hasError = receipt?.data?.validators?.some(
+          (v: any) => v.execution_result === 'ERROR'
+        );
+
+        if (hasError) {
+          const errorMsg = receipt?.data?.validators?.find((v: any) => v.execution_result === 'ERROR')?.genvm_result?.stderr || 'Transaction failed in GenVM execution.';
+          setDeployState('error');
+          setTxError(errorMsg);
+          return;
         }
 
         // FIX #1: Extract real on-chain grant ID returned by create_grant
@@ -580,6 +588,16 @@ export function App() {
         const receipt = await client.waitForTransactionReceipt({ hash: txHash });
         addLog(`Real on-chain escrow payout executed! TX: ${txHash}`, "SUCCESS", txHash);
 
+        // GenLayer specific error check
+        const hasError = receipt?.data?.validators?.some(
+          (v: any) => v.execution_result === 'ERROR'
+        );
+
+        if (hasError) {
+          const errorMsg = receipt?.data?.validators?.find((v: any) => v.execution_result === 'ERROR')?.genvm_result?.stderr || 'Transaction failed in GenVM execution.';
+          throw new Error(errorMsg);
+        }
+
         // Parse actual verdict JSON returned by contract
         // eslint-disable-next-line @typescript-eslint/ban-ts-comment
         // @ts-ignore
@@ -595,7 +613,10 @@ export function App() {
           } catch { /* use defaults if JSON parse fails */ }
         }
       } catch (err: unknown) {
-        addLog(`Consensus confirmed on Studionet. Vault payout transferred on-chain in studio synchronization.`, "SUCCESS");
+        addLog(`[Error] Adjudication failed: ${(err as Error).message || 'Unknown error'}`, "ERROR");
+        setActiveStep(0);
+        setIsAdjudicating(false);
+        return;
       }
 
       addLog(`[LLM Consensus] 9/9 Validator nodes locked BFT agreement on verdict: ${realVerdict} (Confidence: ${realConfidence}%).`, "VERDICT");
@@ -1493,6 +1514,7 @@ export function App() {
                 })}
               </div>
             </div>
+          </div>
           )}
         </div>
       </div>

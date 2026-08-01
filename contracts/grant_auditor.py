@@ -34,7 +34,7 @@ class Contract(gl.Contract):
 
     @gl.public.write.payable
     def create_grant(self, grantee: Address, proposal_url: str, milestone_amounts_str: str) -> str:
-        funder = gl.msg.sender
+        funder = gl.message.sender_address
         
         # Parse milestone amounts (supports comma-separated "100,200" or JSON array "[100, 200]")
         try:
@@ -57,8 +57,8 @@ class Contract(gl.Contract):
         total_amount = bigint(total_calc)
         
         # Check value locked
-        if gl.msg.value < total_amount:
-            raise UserError(f"Insufficient funds sent. Expected {str(total_amount)}, got {str(gl.msg.value)}.")
+        if gl.message.value < total_amount:
+            raise UserError(f"Insufficient funds sent. Expected {str(total_amount)}, got {str(gl.message.value)}.")
 
         grant_id = str(self.next_grant_id)
         self.next_grant_id += bigint(1)
@@ -90,8 +90,8 @@ class Contract(gl.Contract):
             raise UserError("Grant not found.")
         
         grant = self.grants[grant_id]
-        if gl.msg.sender != grant.grantee:
-            raise UserError("Only grantee can submit evidence.")
+        if gl.message.sender_address != grant.grantee:
+            raise UserError("Only the grantee can submit milestones.")
             
         if grant.status == "CLOSED":
             raise UserError("This grant is closed.")
