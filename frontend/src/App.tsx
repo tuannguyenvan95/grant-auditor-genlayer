@@ -45,7 +45,7 @@ declare global {
 }
 
 // GenLayer Contract Address for GrantAuditor
-const CONTRACT_ADDRESS = import.meta.env.VITE_CONTRACT_ADDRESS || '0xCa09a3B1a6442E80d98247a2314FA9E95d984bB1';
+const CONTRACT_ADDRESS = import.meta.env.VITE_CONTRACT_ADDRESS || '0x966320cCc71B0010b23c309a72d01CB954fDeF43';
 const EXPLORER_BASE_URL = "https://genlayer-explorer.vercel.app";
 
 type VerdictStatus = 'PENDING' | 'SUBMITTED' | 'APPROVED' | 'PARTIAL' | 'CUT' | 'ESCALATED';
