@@ -741,7 +741,7 @@ export function App() {
         <div className="flex items-center space-x-5">
           <div className="flex items-center space-x-3">
             <div className="w-9 h-9 flex items-center justify-center">
-              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="drop-shadow-[0_0_8px_rgba(168,85,247,0.4)]">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="-scale-x-100 drop-shadow-[0_0_8px_rgba(168,85,247,0.4)]">
                 <path d="M12.983 2L3 13.064H11.082L8.983 22L19.966 10.936H11.884L13.983 2Z" fill="url(#genlayer-grad-header)"/>
                 <defs>
                   <linearGradient id="genlayer-grad-header" x1="3" y1="2" x2="19.966" y2="22" gradientUnits="userSpaceOnUse">
@@ -1530,7 +1530,7 @@ export function App() {
             {/* Col 1: Protocol Mission */}
             <div className="space-y-3">
               <div className="flex items-center space-x-2.5">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="-scale-x-100">
                   <path d="M12.983 2L3 13.064H11.082L8.983 22L19.966 10.936H11.884L13.983 2Z" fill="url(#genlayer-grad-footer)"/>
                   <defs>
                     <linearGradient id="genlayer-grad-footer" x1="3" y1="2" x2="19.966" y2="22" gradientUnits="userSpaceOnUse">
