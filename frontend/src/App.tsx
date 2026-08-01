@@ -483,6 +483,10 @@ export function App() {
     const url = evidenceInputs[key];
     const report = reportInputs[key];
 
+    if (!account) {
+      alert('Please connect your wallet first. Only the designated Grantee can submit evidence on-chain.');
+      return;
+    }
     if (!report || report.trim().length < 10) {
       alert("Please enter a detailed progress report summary (at least 10 characters) detailing your achievements for this milestone.");
       return;
@@ -547,6 +551,10 @@ export function App() {
   };
 
   const handleTriggerAIJudge = async (grant: Grant, milestone: Milestone) => {
+    if (!account) {
+      alert('Please connect your wallet first. Adjudication triggers a real on-chain transaction.');
+      return;
+    }
     const judgeKey = `${grant.grantId}-${milestone.id}`;
     setAdjudicatingKey(judgeKey);
     setValidatorProgress(1);
@@ -779,7 +787,13 @@ export function App() {
           </button>
 
           <button
-            onClick={() => setIsDeployModalOpen(true)}
+            onClick={() => {
+              if (!account) {
+                alert('Please connect your wallet first to deploy an Escrow Vault and lock GEN tokens on-chain.');
+                return;
+              }
+              setIsDeployModalOpen(true);
+            }}
             className="flex items-center space-x-2 px-4 py-2 rounded-xl bg-gradient-to-r from-cyan-400 via-indigo-500 to-indigo-600 hover:from-cyan-300 hover:to-indigo-400 text-black font-mono font-black uppercase tracking-wider shadow-lg shadow-cyan-500/20 transition-all cursor-pointer transform hover:-translate-y-0.5 text-xs"
           >
             <Plus className="w-4 h-4 stroke-[3]" />
