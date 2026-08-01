@@ -46,7 +46,7 @@ declare global {
 
 // GenLayer Contract Address for GrantAuditor
 const CONTRACT_ADDRESS = import.meta.env.VITE_CONTRACT_ADDRESS || '0x966320cCc71B0010b23c309a72d01CB954fDeF43';
-const EXPLORER_BASE_URL = "https://genlayer-explorer.vercel.app";
+const EXPLORER_BASE_URL = "https://explorer-studio.genlayer.com";
 
 type VerdictStatus = 'PENDING' | 'SUBMITTED' | 'APPROVED' | 'PARTIAL' | 'CUT' | 'ESCALATED';
 
@@ -1749,7 +1749,7 @@ export function App() {
                     <span className="text-zinc-200 leading-relaxed break-all font-sans text-xs sm:text-sm">{log.message}</span>
                     {log.txHash && (
                       <a
-                        href={`${EXPLORER_BASE_URL}/tx/${log.txHash}`}
+                        href={`${EXPLORER_BASE_URL}/transactions/${log.txHash}`}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="text-cyan-400 hover:text-cyan-300 text-xs font-bold underline inline-flex items-center space-x-1 font-mono pt-1"
