@@ -1377,99 +1377,108 @@ export function App() {
                         {/* STATE 1: PENDING -> Deliverable & Progress Report Injection Console */}
                         {ms.status === 'PENDING' && (
                           <div className="space-y-4">
-                            {/* Role Ownership Check Banner */}
-                            {account && account.toLowerCase() !== activeGrant.grantee.toLowerCase() ? (
-                              <div className="p-3.5 bg-amber-950/70 border border-amber-500/60 rounded-xl flex items-start space-x-3 font-sans text-xs sm:text-sm text-amber-200 shadow-md">
+                            {/* Role Ownership Check & Conditional Console Display */}
+                            {(!account || account.toLowerCase() !== activeGrant.grantee.toLowerCase()) ? (
+                              <div className="p-4 bg-amber-950/70 border border-amber-500/60 rounded-2xl flex items-start space-x-3.5 font-sans text-xs sm:text-sm text-amber-200 shadow-md">
                                 <AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
-                                <div className="space-y-1">
-                                  <span className="font-extrabold text-amber-300 uppercase block font-mono tracking-wider">🔒 ROLE ACCESS CONTROL WARNING (NON-GRANTEE WALLET)</span>
-                                  <div className="leading-relaxed text-xs">
-                                    You are currently connected as <code className="bg-black/50 px-1.5 py-0.5 rounded text-white font-mono">{account.slice(0, 10)}...{account.slice(-6)}</code> (Funder / Observer). Per GenLayer on-chain smart contract consensus rules, <strong>ONLY THE DESIGNATED GRANTEE ({activeGrant.grantee.slice(0, 10)}...{activeGrant.grantee.slice(-6)})</strong> is permitted to submit deliverables for this milestone.
-                                    <div className="text-amber-300 font-bold mt-1">👉 Please switch your MetaMask active account to the Grantee address before clicking "Submit Proof On-Chain".</div>
+                                <div className="space-y-1.5 flex-1">
+                                  <span className="font-extrabold text-amber-300 uppercase block font-mono tracking-wider text-xs sm:text-sm">🔒 ROLE ACCESS CONTROL: WAITING FOR GRANTEE SUBMISSION</span>
+                                  <div className="leading-relaxed text-xs sm:text-sm text-zinc-300">
+                                    {account ? (
+                                      <>You are currently connected as <code className="bg-black/60 px-2 py-0.5 rounded text-white font-mono text-xs">{account.slice(0, 10)}...{account.slice(-6)}</code> (Funder / Observer).</>
+                                    ) : (
+                                      <>You are currently viewing this grant as an independent Observer.</>
+                                    )}{" "}
+                                    Per GenLayer on-chain smart contract consensus rules, only the designated Grantee (<strong className="text-amber-300 font-mono">{activeGrant.grantee.slice(0, 10)}...{activeGrant.grantee.slice(-6)}</strong>) has authorization to submit proof and progress deliverables for this milestone.
+                                    <div className="text-zinc-400 italic mt-2 text-xs border-t border-amber-500/20 pt-2 font-mono">
+                                      * Note: Deliverable submission controls are hidden for non-Grantee accounts to enforce strict on-chain separation of privileges.
+                                    </div>
                                   </div>
                                 </div>
                               </div>
                             ) : (
-                              <div className="p-3 bg-emerald-950/50 border border-emerald-500/50 rounded-xl flex items-center space-x-2.5 font-mono text-xs text-emerald-300 shadow-inner">
-                                <Sparkles className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-                                <span>👑 AUTHORIZED ROLE: You are connected with the designated Grantee wallet ({activeGrant.grantee.slice(0, 8)}...). You have full on-chain permissions to submit evidence!</span>
-                              </div>
-                            )}
+                              <>
+                                <div className="p-3.5 bg-emerald-950/60 border border-emerald-500/60 rounded-xl flex items-center space-x-3 font-mono text-xs text-emerald-300 shadow-inner">
+                                  <Sparkles className="w-5 h-5 text-emerald-400 flex-shrink-0" />
+                                  <span>👑 AUTHORIZED ROLE: You are connected with the designated Grantee wallet ({activeGrant.grantee.slice(0, 8)}...). You have full on-chain permissions to submit evidence!</span>
+                                </div>
 
-                            <div className="flex flex-wrap items-center justify-between text-xs text-zinc-300 font-mono font-bold border-b border-zinc-800 pb-2">
-                              <span className="flex items-center space-x-1.5">
-                                <FileText className="w-4 h-4 text-cyan-400" />
-                                <span>GRANTEE DELIVERABLE INJECTION CONSOLE</span>
-                              </span>
-                              <span className="text-cyan-300">Requires Progress Report & Public Evidence URL</span>
-                            </div>
-                            
-                            {/* 1-Click Demo Presets for Testing */}
-                            <div className="bg-zinc-900/90 p-3.5 rounded-xl border border-zinc-800 space-y-2.5">
-                              <div className="flex items-center space-x-1.5 text-xs text-amber-300 font-mono font-bold">
-                                <Sparkles className="w-4 h-4 text-amber-400 animate-pulse" />
-                                <span>⚡ 1-CLICK DEMO EVIDENCE PRESETS (Test AI Verdicts):</span>
-                              </div>
-                              <div className="flex flex-wrap gap-2">
-                                <button
-                                  type="button"
-                                  onClick={() => applyDemoEvidence(activeGrant.grantId, ms.id, 'release')}
-                                  className="px-3 py-1.5 bg-emerald-950/70 hover:bg-emerald-900 border border-emerald-500/50 hover:border-emerald-400 text-emerald-300 rounded-lg text-[11px] font-bold font-sans flex items-center space-x-1.5 transition-all shadow-sm cursor-pointer transform hover:-translate-y-0.5"
-                                >
-                                  <span>🟢 Demo: 100% RELEASE (Pass)</span>
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => applyDemoEvidence(activeGrant.grantId, ms.id, 'partial')}
-                                  className="px-3 py-1.5 bg-amber-950/70 hover:bg-amber-900 border border-amber-500/50 hover:border-amber-400 text-amber-300 rounded-lg text-[11px] font-bold font-sans flex items-center space-x-1.5 transition-all shadow-sm cursor-pointer transform hover:-translate-y-0.5"
-                                >
-                                  <span>🟡 Demo: 50% PARTIAL (Split)</span>
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => applyDemoEvidence(activeGrant.grantId, ms.id, 'cut')}
-                                  className="px-3 py-1.5 bg-rose-950/70 hover:bg-rose-900 border border-rose-500/50 hover:border-rose-400 text-rose-300 rounded-lg text-[11px] font-bold font-sans flex items-center space-x-1.5 transition-all shadow-sm cursor-pointer transform hover:-translate-y-0.5"
-                                >
-                                  <span>🔴 Demo: 0% CUT (Refund)</span>
-                                </button>
-                              </div>
-                            </div>
+                                <div className="flex flex-wrap items-center justify-between text-xs text-zinc-300 font-mono font-bold border-b border-zinc-800 pb-2">
+                                  <span className="flex items-center space-x-1.5">
+                                    <FileText className="w-4 h-4 text-cyan-400" />
+                                    <span>GRANTEE DELIVERABLE INJECTION CONSOLE</span>
+                                  </span>
+                                  <span className="text-cyan-300">Requires Progress Report & Public Evidence URL</span>
+                                </div>
+                                
+                                {/* 1-Click Demo Presets for Testing */}
+                                <div className="bg-zinc-900/90 p-3.5 rounded-xl border border-zinc-800 space-y-2.5">
+                                  <div className="flex items-center space-x-1.5 text-xs text-amber-300 font-mono font-bold">
+                                    <Sparkles className="w-4 h-4 text-amber-400 animate-pulse" />
+                                    <span>⚡ 1-CLICK DEMO EVIDENCE PRESETS (Test AI Verdicts):</span>
+                                  </div>
+                                  <div className="flex flex-wrap gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => applyDemoEvidence(activeGrant.grantId, ms.id, 'release')}
+                                      className="px-3 py-1.5 bg-emerald-950/70 hover:bg-emerald-900 border border-emerald-500/50 hover:border-emerald-400 text-emerald-300 rounded-lg text-[11px] font-bold font-sans flex items-center space-x-1.5 transition-all shadow-sm cursor-pointer transform hover:-translate-y-0.5"
+                                    >
+                                      <span>🟢 Demo: 100% RELEASE (Pass)</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => applyDemoEvidence(activeGrant.grantId, ms.id, 'partial')}
+                                      className="px-3 py-1.5 bg-amber-950/70 hover:bg-amber-900 border border-amber-500/50 hover:border-amber-400 text-amber-300 rounded-lg text-[11px] font-bold font-sans flex items-center space-x-1.5 transition-all shadow-sm cursor-pointer transform hover:-translate-y-0.5"
+                                    >
+                                      <span>🟡 Demo: 50% PARTIAL (Split)</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => applyDemoEvidence(activeGrant.grantId, ms.id, 'cut')}
+                                      className="px-3 py-1.5 bg-rose-950/70 hover:bg-rose-900 border border-rose-500/50 hover:border-rose-400 text-rose-300 rounded-lg text-[11px] font-bold font-sans flex items-center space-x-1.5 transition-all shadow-sm cursor-pointer transform hover:-translate-y-0.5"
+                                    >
+                                      <span>🔴 Demo: 0% CUT (Refund)</span>
+                                    </button>
+                                  </div>
+                                </div>
 
-                            {/* Progress Report Text Area */}
-                            <div className="space-y-1.5">
-                              <label className="block text-xs font-mono text-zinc-400 uppercase font-bold">1. Progress Report & Deliverable Summary</label>
-                              <textarea
-                                rows={3}
-                                placeholder="Describe completed features, benchmark results, test coverage, or architecture implementation..."
-                                value={reportInputs[`${activeGrant.grantId}-${ms.id}`] || ""}
-                                onChange={(e) => setReportInputs({ ...reportInputs, [`${activeGrant.grantId}-${ms.id}`]: e.target.value })}
-                                className="w-full bg-[#111422] border border-zinc-700/90 rounded-xl p-3.5 text-xs sm:text-sm text-white placeholder-zinc-500 font-sans focus:outline-none focus:border-cyan-400 transition-colors shadow-inner leading-relaxed"
-                              />
-                            </div>
-
-                            {/* Evidence Link & Submit */}
-                            <div className="space-y-1.5">
-                              <label className="block text-xs font-mono text-zinc-400 uppercase font-bold">2. Public Evidence URL (GitHub PR, Notion Doc, Website, Demo Video)</label>
-                              <div className="flex flex-col sm:flex-row gap-3">
-                                <div className="flex-1 relative">
-                                  <GitPullRequest className="w-4 h-4 text-zinc-400 absolute left-4 top-3.5" />
-                                  <input
-                                    type="url"
-                                    placeholder="https://github.com/org/project/pull/12 or website URL..."
-                                    value={evidenceInputs[`${activeGrant.grantId}-${ms.id}`] || ""}
-                                    onChange={(e) => setEvidenceInputs({ ...evidenceInputs, [`${activeGrant.grantId}-${ms.id}`]: e.target.value })}
-                                    className="w-full bg-[#111422] border border-zinc-700/90 rounded-xl pl-12 pr-4 py-3 text-xs sm:text-sm text-white placeholder-zinc-500 font-mono focus:outline-none focus:border-cyan-400 transition-colors shadow-inner"
+                                {/* Progress Report Text Area */}
+                                <div className="space-y-1.5">
+                                  <label className="block text-xs font-mono text-zinc-400 uppercase font-bold">1. Progress Report & Deliverable Summary</label>
+                                  <textarea
+                                    rows={3}
+                                    placeholder="Describe completed features, benchmark results, test coverage, or architecture implementation..."
+                                    value={reportInputs[`${activeGrant.grantId}-${ms.id}`] || ""}
+                                    onChange={(e) => setReportInputs({ ...reportInputs, [`${activeGrant.grantId}-${ms.id}`]: e.target.value })}
+                                    className="w-full bg-[#111422] border border-zinc-700/90 rounded-xl p-3.5 text-xs sm:text-sm text-white placeholder-zinc-500 font-sans focus:outline-none focus:border-cyan-400 transition-colors shadow-inner leading-relaxed"
                                   />
                                 </div>
-                                <button
-                                  onClick={() => handleSubmitEvidence(activeGrant.grantId, ms.id)}
-                                  className="px-8 py-3 bg-gradient-to-r from-cyan-500 via-indigo-600 to-indigo-700 hover:from-cyan-400 hover:to-indigo-500 text-black font-mono font-black text-xs sm:text-sm uppercase tracking-wider rounded-xl transition-all cursor-pointer shadow-xl flex items-center justify-center space-x-2 whitespace-nowrap transform hover:-translate-y-0.5"
-                                >
-                                  <span>Submit Proof On-Chain</span>
-                                  <ChevronRight className="w-4 h-4" />
-                                </button>
-                              </div>
-                            </div>
+
+                                {/* Evidence Link & Submit */}
+                                <div className="space-y-1.5">
+                                  <label className="block text-xs font-mono text-zinc-400 uppercase font-bold">2. Public Evidence URL (GitHub PR, Notion Doc, Website, Demo Video)</label>
+                                  <div className="flex flex-col sm:flex-row gap-3">
+                                    <div className="flex-1 relative">
+                                      <GitPullRequest className="w-4 h-4 text-zinc-400 absolute left-4 top-3.5" />
+                                      <input
+                                        type="url"
+                                        placeholder="https://github.com/org/project/pull/12 or website URL..."
+                                        value={evidenceInputs[`${activeGrant.grantId}-${ms.id}`] || ""}
+                                        onChange={(e) => setEvidenceInputs({ ...evidenceInputs, [`${activeGrant.grantId}-${ms.id}`]: e.target.value })}
+                                        className="w-full bg-[#111422] border border-zinc-700/90 rounded-xl pl-12 pr-4 py-3 text-xs sm:text-sm text-white placeholder-zinc-500 font-mono focus:outline-none focus:border-cyan-400 transition-colors shadow-inner"
+                                      />
+                                    </div>
+                                    <button
+                                      onClick={() => handleSubmitEvidence(activeGrant.grantId, ms.id)}
+                                      className="px-8 py-3 bg-gradient-to-r from-cyan-500 via-indigo-600 to-indigo-700 hover:from-cyan-400 hover:to-indigo-500 text-black font-mono font-black text-xs sm:text-sm uppercase tracking-wider rounded-xl transition-all cursor-pointer shadow-xl flex items-center justify-center space-x-2 whitespace-nowrap transform hover:-translate-y-0.5"
+                                    >
+                                      <span>Submit Proof On-Chain</span>
+                                      <ChevronRight className="w-4 h-4" />
+                                    </button>
+                                  </div>
+                                </div>
+                              </>
+                            )}
                           </div>
                         )}
 
