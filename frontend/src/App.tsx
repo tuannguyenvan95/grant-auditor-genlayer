@@ -608,61 +608,56 @@ export function App() {
       return;
     }
 
-    // FIX #1: Resolve real on-chain grant ID for contract call
+    // Resolve real on-chain grant ID for contract call
     const grant = grants.find(g => g.grantId === grantId);
-    const contractGrantId = grant?.onChainId;
-    // FIX #2: Convert milestone_id to string for contract compatibility
+    const contractGrantId = grant?.onChainId || grantId;
+    // Convert milestone_id to string for contract compatibility
     const contractMilestoneId = String(milestoneId - 1);
 
     setSubmittingKey(key);
-    addLog(`Broadcasting progress report and deliverable proof for ${grantId} Tranche #${milestoneId} on-chain...`, "TX");
+    addLog(`Broadcasting real on-chain progress report and proof for ${grantId} Tranche #${milestoneId}...`, "TX");
     try {
-      if (!contractGrantId) {
-        // Sample/mock vault without onChainId -> advance local simulation
-        await new Promise(r => setTimeout(r, 1000));
-        addLog(`Demo Vault: Evidence recorded locally for testing AI verdicts.`, "INFO");
-      } else {
-        const client = getGenLayerClient();
-        try {
-          const txHash = await client.writeContract({
-            address: CONTRACT_ADDRESS as `0x${string}`,
-            functionName: 'submit_evidence',
-            args: [contractGrantId, contractMilestoneId, url],
-            value: 0n,
-            // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-            // @ts-ignore
-            maxFeePerGas: 500000000n,
-            // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-            // @ts-ignore
-            maxPriorityFeePerGas: 500000000n
-          });
+      const client = getGenLayerClient();
+      try {
+        const txHash = await client.writeContract({
+          address: CONTRACT_ADDRESS as `0x${string}`,
+          functionName: 'submit_evidence',
+          args: [contractGrantId, contractMilestoneId, url],
+          value: 0n,
           // eslint-disable-next-line @typescript-eslint/ban-ts-comment
           // @ts-ignore
-          const receipt = await client.waitForTransactionReceipt({ hash: txHash });
-          
+          maxFeePerGas: 500000000n,
           // eslint-disable-next-line @typescript-eslint/ban-ts-comment
           // @ts-ignore
-          const rcpt = receipt as any;
-          const hasError = rcpt?.status === 0 || rcpt?.status_name === 'REJECTED' || (rcpt?.data?.validators?.some((v: any) => v.execution_result === 'ERROR'));
-          if (hasError) {
-            let errorMsg = 'Transaction failed or rejected by consensus.';
-            if (rcpt?.status_name === 'REJECTED') {
-              errorMsg = 'Transaction REJECTED by GenLayer consensus. Validators disagreed.';
-            } else {
-              const vError = rcpt?.data?.validators?.find((v: any) => v.execution_result === 'ERROR')?.genvm_result?.stderr;
-              if (vError) errorMsg = vError;
-            }
-            throw new Error(errorMsg);
+          maxPriorityFeePerGas: 500000000n
+        });
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore
+        const receipt = await client.waitForTransactionReceipt({ hash: txHash });
+        
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore
+        const rcpt = receipt as any;
+        const hasError = rcpt?.status === 0 || rcpt?.status_name === 'REJECTED' || (rcpt?.data?.validators?.some((v: any) => v.execution_result === 'ERROR'));
+        if (hasError) {
+          let errorMsg = 'Transaction failed or rejected by consensus.';
+          if (rcpt?.status_name === 'REJECTED') {
+            errorMsg = 'Transaction REJECTED by GenLayer consensus. Validators disagreed.';
+          } else {
+            const vError = rcpt?.data?.validators?.find((v: any) => v.execution_result === 'ERROR')?.genvm_result?.stderr;
+            if (vError) errorMsg = vError;
           }
-
-          addLog(`Evidence submission mined! TX: ${txHash}`, "SUCCESS", txHash);
-        } catch (err: unknown) {
-          const errorMsg = (err as Error).message || String(err);
-          addLog(`Error submitting evidence: ${errorMsg}`, "ERROR");
-          alert(`❌ Evidence Submission Failed on GenLayer:\n\n${errorMsg}\n\n👉 Tips:\n- Ensure you confirmed the transaction in MetaMask.\n- Check that your wallet has enough Studionet GEN for gas.`);
-          return; // DONT update local state if on-chain failed!
+          throw new Error(errorMsg);
         }
+
+        addLog(`Evidence submission confirmed on-chain! TX: ${txHash}`, "SUCCESS", txHash);
+      } catch (err: unknown) {
+        const errorMsg = (err as Error).message || String(err);
+        addLog(`On-chain transaction error: ${errorMsg}`, "ERROR");
+        alert(`❌ On-Chain Evidence Submission Failed:\n\n${errorMsg}\n\n👉 Ensure your MetaMask wallet is connected to GenLayer Studionet and you confirm the real transaction.`);
+        return; // DONT update local state if on-chain transaction failed!
       }
+
 
       setGrants(prev => prev.map(g => {
         if (g.grantId !== grantId) return g;
@@ -1502,11 +1497,11 @@ export function App() {
                                   <span className="text-cyan-300">Requires Progress Report & Public Evidence URL</span>
                                 </div>
                                 
-                                {/* 1-Click Demo Presets for Testing */}
+                                {/* Quick Sample Text Templates for On-Chain Submission */}
                                 <div className="bg-zinc-900/90 p-3.5 rounded-xl border border-zinc-800 space-y-2.5">
                                   <div className="flex items-center space-x-1.5 text-xs text-amber-300 font-mono font-bold">
                                     <Sparkles className="w-4 h-4 text-amber-400 animate-pulse" />
-                                    <span>⚡ 1-CLICK DEMO EVIDENCE PRESETS (Test AI Verdicts):</span>
+                                    <span>⚡ QUICK TEXT TEMPLATES (Auto-fill inputs for Real On-Chain Submit):</span>
                                   </div>
                                   <div className="flex flex-wrap gap-2">
                                     <button
@@ -1514,21 +1509,21 @@ export function App() {
                                       onClick={() => applyDemoEvidence(activeGrant.grantId, ms.id, 'release')}
                                       className="px-3 py-1.5 bg-emerald-950/70 hover:bg-emerald-900 border border-emerald-500/50 hover:border-emerald-400 text-emerald-300 rounded-lg text-[11px] font-bold font-sans flex items-center space-x-1.5 transition-all shadow-sm cursor-pointer transform hover:-translate-y-0.5"
                                     >
-                                      <span>🟢 Demo: 100% RELEASE (Pass)</span>
+                                      <span>🟢 Template: Complete Deliverable (100%)</span>
                                     </button>
                                     <button
                                       type="button"
                                       onClick={() => applyDemoEvidence(activeGrant.grantId, ms.id, 'partial')}
                                       className="px-3 py-1.5 bg-amber-950/70 hover:bg-amber-900 border border-amber-500/50 hover:border-amber-400 text-amber-300 rounded-lg text-[11px] font-bold font-sans flex items-center space-x-1.5 transition-all shadow-sm cursor-pointer transform hover:-translate-y-0.5"
                                     >
-                                      <span>🟡 Demo: 50% PARTIAL (Split)</span>
+                                      <span>🟡 Template: Partial Progress (50%)</span>
                                     </button>
                                     <button
                                       type="button"
                                       onClick={() => applyDemoEvidence(activeGrant.grantId, ms.id, 'cut')}
                                       className="px-3 py-1.5 bg-rose-950/70 hover:bg-rose-900 border border-rose-500/50 hover:border-rose-400 text-rose-300 rounded-lg text-[11px] font-bold font-sans flex items-center space-x-1.5 transition-all shadow-sm cursor-pointer transform hover:-translate-y-0.5"
                                     >
-                                      <span>🔴 Demo: 0% CUT (Refund)</span>
+                                      <span>🔴 Template: Unmet Deliverables (0%)</span>
                                     </button>
                                   </div>
                                 </div>
