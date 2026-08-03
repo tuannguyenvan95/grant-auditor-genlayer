@@ -45,7 +45,7 @@ declare global {
 }
 
 // GenLayer Contract Address for GrantAuditor (Synchronized with latest on-chain deployment)
-const CONTRACT_ADDRESS = '0x5563d08a66E9169B5258060fe1F3350b25e33842';
+const CONTRACT_ADDRESS = '0x6aac8F778D8784FA314E52898968B8260f3197A3';
 const EXPLORER_BASE_URL = "https://explorer-studio.genlayer.com";
 
 type VerdictStatus = 'PENDING' | 'SUBMITTED' | 'APPROVED' | 'PARTIAL' | 'CUT' | 'ESCALATED';
@@ -638,11 +638,17 @@ export function App() {
         // eslint-disable-next-line @typescript-eslint/ban-ts-comment
         // @ts-ignore
         const rcpt = receipt as any;
-        const hasError = rcpt?.status === 0 || rcpt?.status_name === 'REJECTED' || (rcpt?.data?.validators?.some((v: any) => v.execution_result === 'ERROR'));
+        const hasError = rcpt?.status === 0 || rcpt?.status_name === 'REJECTED' || 
+                         rcpt?.data?.execution_result === 'ERROR' || 
+                         rcpt?.data?.leader_error != null || 
+                         (rcpt?.data?.result && typeof rcpt.data.result === 'string' && rcpt.data.result.includes('"error"')) ||
+                         (rcpt?.data?.validators?.some((v: any) => v.execution_result === 'ERROR'));
         if (hasError) {
-          let errorMsg = 'Transaction failed or rejected by consensus.';
+          let errorMsg = 'Transaction failed or rejected by GenVM consensus.';
           if (rcpt?.status_name === 'REJECTED') {
             errorMsg = 'Transaction REJECTED by GenLayer consensus. Validators disagreed.';
+          } else if (rcpt?.data?.leader_error) {
+            errorMsg = String(rcpt.data.leader_error);
           } else {
             const vError = rcpt?.data?.validators?.find((v: any) => v.execution_result === 'ERROR')?.genvm_result?.stderr;
             if (vError) errorMsg = vError;
@@ -745,24 +751,30 @@ export function App() {
         // eslint-disable-next-line @typescript-eslint/ban-ts-comment
         // @ts-ignore
         const receipt = await client.waitForTransactionReceipt({ hash: txHash });
-        addLog(`Real on-chain escrow payout executed! TX: ${txHash}`, "SUCCESS", txHash);
-
         // GenLayer specific error check
         // eslint-disable-next-line @typescript-eslint/ban-ts-comment
         // @ts-ignore
         const rcpt = receipt as any;
-        const hasError = rcpt?.status === 0 || rcpt?.status_name === 'REJECTED' || (rcpt?.data?.validators?.some((v: any) => v.execution_result === 'ERROR'));
+        const hasError = rcpt?.status === 0 || rcpt?.status_name === 'REJECTED' || 
+                         rcpt?.data?.execution_result === 'ERROR' || 
+                         rcpt?.data?.leader_error != null || 
+                         (rcpt?.data?.result && typeof rcpt.data.result === 'string' && rcpt.data.result.includes('"error"')) ||
+                         (rcpt?.data?.validators?.some((v: any) => v.execution_result === 'ERROR'));
         
         if (hasError) {
-          let errorMsg = 'Transaction failed or rejected by consensus.';
+          let errorMsg = 'Transaction failed or rejected by GenVM consensus.';
           if (rcpt?.status_name === 'REJECTED') {
             errorMsg = 'Transaction REJECTED by GenLayer consensus. Validators disagreed.';
+          } else if (rcpt?.data?.leader_error) {
+            errorMsg = String(rcpt.data.leader_error);
           } else {
             const vError = rcpt?.data?.validators?.find((v: any) => v.execution_result === 'ERROR')?.genvm_result?.stderr;
             if (vError) errorMsg = vError;
           }
           throw new Error(errorMsg);
         }
+
+        addLog(`Real on-chain escrow payout executed! TX: ${txHash}`, "SUCCESS", txHash);
 
         // Parse actual verdict JSON returned by contract
         // eslint-disable-next-line @typescript-eslint/ban-ts-comment

@@ -34,7 +34,8 @@ class Contract(gl.Contract):
 
     @gl.public.write.payable
     def create_grant(self, grantee: str, proposal_url: str, milestone_amounts_str: str) -> str:
-        funder = str(gl.message.sender_address)
+        funder = str(gl.message.sender_address).lower()
+        grantee = str(grantee).lower()
         
         # Parse milestone amounts (supports comma-separated "100,200" or JSON array "[100, 200]")
         try:
@@ -90,7 +91,7 @@ class Contract(gl.Contract):
             raise UserError("Grant not found.")
         
         grant = self.grants[grant_id]
-        if gl.message.sender_address != grant.grantee:
+        if str(gl.message.sender_address).lower() != str(grant.grantee).lower():
             raise UserError("Only the grantee can submit milestones.")
             
         if grant.status == "CLOSED":
