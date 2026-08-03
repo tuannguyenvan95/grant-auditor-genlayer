@@ -193,6 +193,7 @@ export function App() {
   // Milestone Deliverable Actions (Report Text + Evidence URL)
   const [reportInputs, setReportInputs] = useState<Record<string, string>>({});
   const [evidenceInputs, setEvidenceInputs] = useState<Record<string, string>>({});
+  const [submittingKey, setSubmittingKey] = useState<string | null>(null);
   const [adjudicatingKey, setAdjudicatingKey] = useState<string | null>(null);
   const [validatorProgress, setValidatorProgress] = useState<number>(0);
   const [activeStepText, setActiveStepText] = useState<string>("");
@@ -316,17 +317,31 @@ export function App() {
                 let reasoning = exM.llmReasoning;
                 let report = exM.progressReport || ocm.progressReport;
                 
-                if (ocm.status !== exM.status) {
+                let targetStatus = ocm.status;
+                const statusWeight: Record<string, number> = {
+                  'PENDING': 0,
+                  'SUBMITTED': 1,
+                  'APPROVED': 2,
+                  'PARTIAL': 2,
+                  'CUT': 2,
+                  'ESCALATED': 2
+                };
+                // Never downgrade a locally advanced milestone status due to RPC indexing read lag
+                if ((statusWeight[exM.status] || 0) > (statusWeight[ocm.status] || 0)) {
+                  targetStatus = exM.status;
+                }
+
+                if (targetStatus !== exM.status) {
                   verdict = ocm.llmVerdict;
                   reasoning = ocm.llmReasoning;
-                  if (!report && ocm.status !== 'PENDING' && ocm.status !== 'SUBMITTED') {
+                  if (!report && targetStatus !== 'PENDING' && targetStatus !== 'SUBMITTED') {
                     report = "Deliverable execution and evidence verified on-chain via GenLayer nodes.";
                   }
                 }
                 
                 return {
                   ...exM,
-                  status: ocm.status,
+                  status: targetStatus,
                   evidenceUrl: ocm.evidenceUrl || exM.evidenceUrl,
                   progressReport: report,
                   llmVerdict: verdict,
@@ -549,6 +564,7 @@ export function App() {
     } catch (e: unknown) {
       const errText = e instanceof Error ? e.message : String(e);
       addLog(`Deployment aborted: ${errText}`, "ERROR");
+      alert(`❌ Vault Deployment Failed on GenLayer:\n\n${errText}\n\n👉 Ensure your MetaMask is on Studionet and you have sufficient GEN for collateral & gas.`);
     } finally {
       setIsDeploying(false);
     }
@@ -594,49 +610,58 @@ export function App() {
 
     // FIX #1: Resolve real on-chain grant ID for contract call
     const grant = grants.find(g => g.grantId === grantId);
-    const contractGrantId = grant?.onChainId || grantId;
+    const contractGrantId = grant?.onChainId;
     // FIX #2: Convert milestone_id to string for contract compatibility
     const contractMilestoneId = String(milestoneId - 1);
 
+    setSubmittingKey(key);
     addLog(`Broadcasting progress report and deliverable proof for ${grantId} Tranche #${milestoneId} on-chain...`, "TX");
     try {
-      const client = getGenLayerClient();
-      try {
-        const txHash = await client.writeContract({
-          address: CONTRACT_ADDRESS as `0x${string}`,
-          functionName: 'submit_evidence',
-          args: [contractGrantId, contractMilestoneId, url],
-          value: 0n,
+      if (!contractGrantId) {
+        // Sample/mock vault without onChainId -> advance local simulation
+        await new Promise(r => setTimeout(r, 1000));
+        addLog(`Demo Vault: Evidence recorded locally for testing AI verdicts.`, "INFO");
+      } else {
+        const client = getGenLayerClient();
+        try {
+          const txHash = await client.writeContract({
+            address: CONTRACT_ADDRESS as `0x${string}`,
+            functionName: 'submit_evidence',
+            args: [contractGrantId, contractMilestoneId, url],
+            value: 0n,
+            // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+            // @ts-ignore
+            maxFeePerGas: 500000000n,
+            // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+            // @ts-ignore
+            maxPriorityFeePerGas: 500000000n
+          });
           // eslint-disable-next-line @typescript-eslint/ban-ts-comment
           // @ts-ignore
-          maxFeePerGas: 500000000n,
+          const receipt = await client.waitForTransactionReceipt({ hash: txHash });
+          
           // eslint-disable-next-line @typescript-eslint/ban-ts-comment
           // @ts-ignore
-          maxPriorityFeePerGas: 500000000n
-        });
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-        // @ts-ignore
-        const receipt = await client.waitForTransactionReceipt({ hash: txHash });
-        
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-        // @ts-ignore
-        const rcpt = receipt as any;
-        const hasError = rcpt?.status === 0 || rcpt?.status_name === 'REJECTED' || (rcpt?.data?.validators?.some((v: any) => v.execution_result === 'ERROR'));
-        if (hasError) {
-          let errorMsg = 'Transaction failed or rejected by consensus.';
-          if (rcpt?.status_name === 'REJECTED') {
-            errorMsg = 'Transaction REJECTED by GenLayer consensus. Validators disagreed.';
-          } else {
-            const vError = rcpt?.data?.validators?.find((v: any) => v.execution_result === 'ERROR')?.genvm_result?.stderr;
-            if (vError) errorMsg = vError;
+          const rcpt = receipt as any;
+          const hasError = rcpt?.status === 0 || rcpt?.status_name === 'REJECTED' || (rcpt?.data?.validators?.some((v: any) => v.execution_result === 'ERROR'));
+          if (hasError) {
+            let errorMsg = 'Transaction failed or rejected by consensus.';
+            if (rcpt?.status_name === 'REJECTED') {
+              errorMsg = 'Transaction REJECTED by GenLayer consensus. Validators disagreed.';
+            } else {
+              const vError = rcpt?.data?.validators?.find((v: any) => v.execution_result === 'ERROR')?.genvm_result?.stderr;
+              if (vError) errorMsg = vError;
+            }
+            throw new Error(errorMsg);
           }
-          throw new Error(errorMsg);
-        }
 
-        addLog(`Evidence submission mined! TX: ${txHash}`, "SUCCESS", txHash);
-      } catch (err: unknown) {
-        addLog(`Error submitting evidence: ${(err as Error).message}`, "ERROR");
-        return; // DONT update local state if on-chain failed!
+          addLog(`Evidence submission mined! TX: ${txHash}`, "SUCCESS", txHash);
+        } catch (err: unknown) {
+          const errorMsg = (err as Error).message || String(err);
+          addLog(`Error submitting evidence: ${errorMsg}`, "ERROR");
+          alert(`❌ Evidence Submission Failed on GenLayer:\n\n${errorMsg}\n\n👉 Tips:\n- Ensure you confirmed the transaction in MetaMask.\n- Check that your wallet has enough Studionet GEN for gas.`);
+          return; // DONT update local state if on-chain failed!
+        }
       }
 
       setGrants(prev => prev.map(g => {
@@ -660,6 +685,9 @@ export function App() {
     } catch (e: unknown) {
       const errMsg = e instanceof Error ? e.message : String(e);
       addLog(`Evidence submission error: ${errMsg}`, "ERROR");
+      alert(`❌ Evidence submission error:\n\n${errMsg}`);
+    } finally {
+      setSubmittingKey(null);
     }
   };
 
@@ -1532,11 +1560,25 @@ export function App() {
                                       />
                                     </div>
                                     <button
+                                      disabled={submittingKey === `${activeGrant.grantId}-${ms.id}`}
                                       onClick={() => handleSubmitEvidence(activeGrant.grantId, ms.id)}
-                                      className="px-8 py-3 bg-gradient-to-r from-cyan-500 via-indigo-600 to-indigo-700 hover:from-cyan-400 hover:to-indigo-500 text-black font-mono font-black text-xs sm:text-sm uppercase tracking-wider rounded-xl transition-all cursor-pointer shadow-xl flex items-center justify-center space-x-2 whitespace-nowrap transform hover:-translate-y-0.5"
+                                      className={`px-8 py-3 bg-gradient-to-r ${
+                                        submittingKey === `${activeGrant.grantId}-${ms.id}`
+                                          ? 'from-zinc-700 via-zinc-800 to-zinc-900 cursor-not-allowed border border-zinc-600 text-amber-300'
+                                          : 'from-cyan-500 via-indigo-600 to-indigo-700 hover:from-cyan-400 hover:to-indigo-500 text-black cursor-pointer shadow-xl transform hover:-translate-y-0.5'
+                                      } font-mono font-black text-xs sm:text-sm uppercase tracking-wider rounded-xl transition-all flex items-center justify-center space-x-2 whitespace-nowrap`}
                                     >
-                                      <span>Submit Proof On-Chain</span>
-                                      <ChevronRight className="w-4 h-4" />
+                                      {submittingKey === `${activeGrant.grantId}-${ms.id}` ? (
+                                        <>
+                                          <div className="w-4 h-4 border-2 border-amber-400 border-t-transparent rounded-full animate-spin flex-shrink-0"></div>
+                                          <span>SUBMITTING ON-CHAIN... (Check MetaMask)</span>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <span>Submit Proof On-Chain</span>
+                                          <ChevronRight className="w-4 h-4 flex-shrink-0" />
+                                        </>
+                                      )}
                                     </button>
                                   </div>
                                 </div>
