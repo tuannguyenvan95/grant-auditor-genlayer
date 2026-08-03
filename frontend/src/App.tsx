@@ -44,8 +44,8 @@ declare global {
   }
 }
 
-// GenLayer Contract Address for GrantAuditor
-const CONTRACT_ADDRESS = import.meta.env.VITE_CONTRACT_ADDRESS || '0x6eFd21F37657F7bAe955Efde0190838cfF2949F1';
+// GenLayer Contract Address for GrantAuditor (Synchronized with latest on-chain deployment)
+const CONTRACT_ADDRESS = '0x5563d08a66E9169B5258060fe1F3350b25e33842';
 const EXPLORER_BASE_URL = "https://explorer-studio.genlayer.com";
 
 type VerdictStatus = 'PENDING' | 'SUBMITTED' | 'APPROVED' | 'PARTIAL' | 'CUT' | 'ESCALATED';
@@ -105,31 +105,49 @@ interface Preset {
 
 const PRESETS: Preset[] = [
   {
-    title: "Uniswap v4 Dynamic Fee Hook Architecture",
-    category: "DeFi Infrastructure & Liquidity",
-    description: "Algorithmic volatility-based fee modulation hook with zero gas overhead.",
-    proposalUrl: "https://github.com/Uniswap/v4-core/blob/main/README.md",
-    totalBudget: 2000,
-    splits: "30, 40, 30",
-    milestoneTitles: ["Core Hook Math & Simulation (30%)", "Audit & Studionet Testnet Deploy (40%)", "Liquidity Stress Testing & Prod Docs (30%)"]
-  },
-  {
     title: "EigenLayer AVS Autonomous Risk Guardian",
     category: "Restaking & Consensus",
     description: "Slashing prevention bot supervised by GenLayer subjective LLM adjudication.",
-    proposalUrl: "https://github.com/Layr-Labs/eigenlayer-contracts/blob/master/README.md",
-    totalBudget: 1500,
+    proposalUrl: "https://raw.githubusercontent.com/Layr-Labs/eigenlayer-contracts/master/README.md",
+    totalBudget: 10,
     splits: "50, 50",
     milestoneTitles: ["AVS Slashing Contract Integration (50%)", "Automated Sentinel Anomaly Suite (50%)"]
+  },
+  {
+    title: "DeFi Vault Reentrancy Shield & Security Audit",
+    category: "Security & Verification",
+    description: "Formal mathematical verification and automated reentrancy guard suite.",
+    proposalUrl: "https://raw.githubusercontent.com/OpenZeppelin/openzeppelin-contracts/master/README.md",
+    totalBudget: 12,
+    splits: "50, 50",
+    milestoneTitles: ["Vulnerability Analysis & Static Fixes (50%)", "Formal Stress Test & Verification (50%)"]
   },
   {
     title: "ZetaChain Cross-Chain Governance Bridge",
     category: "Interoperability & Protocols",
     description: "Formal verification suite ensuring parity across multi-chain proposal executions.",
-    proposalUrl: "https://github.com/zeta-chain/node/blob/develop/README.md",
-    totalBudget: 2500,
+    proposalUrl: "https://raw.githubusercontent.com/zeta-chain/node/develop/README.md",
+    totalBudget: 15,
     splits: "40, 60",
     milestoneTitles: ["Messaging Relayer Spec & Prover Hooks (40%)", "End-to-End Security Verification (60%)"]
+  },
+  {
+    title: "AI Agent Router Cross-Chain Gateway",
+    category: "AI Infrastructure",
+    description: "Decentralized router proxy connecting multi-chain agents with zero gas overhead.",
+    proposalUrl: "https://raw.githubusercontent.com/tuannguyenvan95/grant-auditor-genlayer/master/README.md",
+    totalBudget: 20,
+    splits: "30, 70",
+    milestoneTitles: ["Gateway Protocol Spec & Architecture (30%)", "Studionet Testnet Deployment & Proofs (70%)"]
+  },
+  {
+    title: "Uniswap v4 Dynamic Fee Hook Architecture",
+    category: "DeFi Infrastructure & Liquidity",
+    description: "Algorithmic volatility-based fee modulation hook with zero gas overhead.",
+    proposalUrl: "https://raw.githubusercontent.com/Uniswap/v4-core/main/README.md",
+    totalBudget: 30,
+    splits: "30, 40, 30",
+    milestoneTitles: ["Core Hook Math & Simulation (30%)", "Audit & Studionet Testnet Deploy (40%)", "Liquidity Stress Testing & Prod Docs (30%)"]
   }
 ];
 
@@ -167,7 +185,7 @@ export function App() {
   const [newCategory, setNewCategory] = useState("DeFi Core Infrastructure");
   const [newGrantee, setNewGrantee] = useState("");
   const [newProposalUrl, setNewProposalUrl] = useState("");
-  const [newTotalBudget, setNewTotalBudget] = useState<number>(2000);
+  const [newTotalBudget, setNewTotalBudget] = useState<number>(20);
   const [newSplits, setNewSplits] = useState("30, 40, 30");
   const [newTitles, setNewTitles] = useState("Core Implementation (30%), Security Audit (40%), Prod Deploy (30%)");
   const [isDeploying, setIsDeploying] = useState(false);
@@ -463,13 +481,27 @@ export function App() {
       setIsDeployModalOpen(false);
       setNewTitle("");
       setNewProposalUrl("");
-      setNewTotalBudget(2000);
+      setNewTotalBudget(20);
       setNewSplits("30, 40, 30");
     } catch (e: unknown) {
       const errText = e instanceof Error ? e.message : String(e);
       addLog(`Deployment aborted: ${errText}`, "ERROR");
     } finally {
       setIsDeploying(false);
+    }
+  };
+
+  const applyDemoEvidence = (grantId: string, milestoneId: number, type: 'release' | 'partial' | 'cut') => {
+    const key = `${grantId}-${milestoneId}`;
+    if (type === 'release') {
+      setReportInputs({ ...reportInputs, [key]: "All milestones completed perfectly. Security audit passed with 0 vulnerabilities found, comprehensive unit tests written with 100% coverage, and architecture fully deployed to Studionet without errors." });
+      setEvidenceInputs({ ...evidenceInputs, [key]: "https://github.com/Uniswap/v4-core/pull/150" });
+    } else if (type === 'partial') {
+      setReportInputs({ ...reportInputs, [key]: "Core math architecture and initial simulations completed and passing tests. However, production stress tests and GUI documentation were deferred to phase 2 due to external API latency." });
+      setEvidenceInputs({ ...evidenceInputs, [key]: "https://github.com/Uniswap/v4-core/issues/12" });
+    } else if (type === 'cut') {
+      setReportInputs({ ...reportInputs, [key]: "Wired up some basic mock tests and placeholder contracts, but deliverable functions remain unimplemented and broken." });
+      setEvidenceInputs({ ...evidenceInputs, [key]: "https://github.com/dummy-repo/404-not-found-deliverable" });
     }
   };
 
@@ -480,6 +512,12 @@ export function App() {
 
     if (!account) {
       alert('Please connect your wallet first. Only the designated Grantee can submit evidence on-chain.');
+      return;
+    }
+
+    const targetGrant = grants.find(g => g.grantId === grantId);
+    if (targetGrant && account.toLowerCase() !== targetGrant.grantee.toLowerCase()) {
+      alert(`🛑 SAI VÍ NỘP BÀI (ACCESS DENIED)!\n\nBạn đang dùng ví Funder / Người tạo: ${account}\n\nTheo quy định Hợp đồng thông minh trên Blockchain thật (On-Chain Access Control), CHỈ CÓ VÍ GRANTEE ĐƯỢC CHỈ ĐỊNH (${targetGrant.grantee}) mới có quyền Nộp Bài cho Job này!\n\n👉 Vui lòng đổi sang ví Grantee trên MetaMask rồi thử lại.`);
       return;
     }
     if (!report || report.trim().length < 10) {
@@ -1339,6 +1377,25 @@ export function App() {
                         {/* STATE 1: PENDING -> Deliverable & Progress Report Injection Console */}
                         {ms.status === 'PENDING' && (
                           <div className="space-y-4">
+                            {/* Role Ownership Check Banner */}
+                            {account && account.toLowerCase() !== activeGrant.grantee.toLowerCase() ? (
+                              <div className="p-3.5 bg-amber-950/70 border border-amber-500/60 rounded-xl flex items-start space-x-3 font-sans text-xs sm:text-sm text-amber-200 shadow-md">
+                                <AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
+                                <div className="space-y-1">
+                                  <span className="font-extrabold text-amber-300 uppercase block font-mono tracking-wider">🔒 CẢNH BÁO QUYỀN NỘP BÀI (ROLE ACCESS CONTROL)</span>
+                                  <div className="leading-relaxed text-xs">
+                                    Bạn đang kết nối bằng ví <code className="bg-black/50 px-1.5 py-0.5 rounded text-white font-mono">{account.slice(0, 10)}...{account.slice(-6)}</code> (Ví Người Tạo / Quỹ DAO). Theo quy định Hợp đồng Thông minh trên Blockchain thật, <strong>CHỈ CÓ VÍ GRANTEE ({activeGrant.grantee.slice(0, 10)}...{activeGrant.grantee.slice(-6)})</strong> mới được phép Nộp Bài cho Job này.
+                                    <div className="text-amber-300 font-bold mt-1">👉 Hãy mở MetaMask chuyển sang đúng ví Grantee trước khi bấm nút "Submit Proof On-Chain"!</div>
+                                  </div>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="p-3 bg-emerald-950/50 border border-emerald-500/50 rounded-xl flex items-center space-x-2.5 font-mono text-xs text-emerald-300 shadow-inner">
+                                <Sparkles className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+                                <span>👑 QUYỀN HỢP LỆ: Bạn đang ở đúng Ví Grantee ({activeGrant.grantee.slice(0, 8)}...). Bạn có đủ thẩm quyền ký xác nhận Nộp Bài lên Blockchain!</span>
+                              </div>
+                            )}
+
                             <div className="flex flex-wrap items-center justify-between text-xs text-zinc-300 font-mono font-bold border-b border-zinc-800 pb-2">
                               <span className="flex items-center space-x-1.5">
                                 <FileText className="w-4 h-4 text-cyan-400" />
@@ -1347,6 +1404,37 @@ export function App() {
                               <span className="text-cyan-300">Requires Progress Report & Public Evidence URL</span>
                             </div>
                             
+                            {/* 1-Click Demo Presets for Testing */}
+                            <div className="bg-zinc-900/90 p-3.5 rounded-xl border border-zinc-800 space-y-2.5">
+                              <div className="flex items-center space-x-1.5 text-xs text-amber-300 font-mono font-bold">
+                                <Sparkles className="w-4 h-4 text-amber-400 animate-pulse" />
+                                <span>⚡ 1-CLICK DEMO EVIDENCE PRESETS (Test AI Verdicts):</span>
+                              </div>
+                              <div className="flex flex-wrap gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => applyDemoEvidence(activeGrant.grantId, ms.id, 'release')}
+                                  className="px-3 py-1.5 bg-emerald-950/70 hover:bg-emerald-900 border border-emerald-500/50 hover:border-emerald-400 text-emerald-300 rounded-lg text-[11px] font-bold font-sans flex items-center space-x-1.5 transition-all shadow-sm cursor-pointer transform hover:-translate-y-0.5"
+                                >
+                                  <span>🟢 Demo: 100% RELEASE (Pass)</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => applyDemoEvidence(activeGrant.grantId, ms.id, 'partial')}
+                                  className="px-3 py-1.5 bg-amber-950/70 hover:bg-amber-900 border border-amber-500/50 hover:border-amber-400 text-amber-300 rounded-lg text-[11px] font-bold font-sans flex items-center space-x-1.5 transition-all shadow-sm cursor-pointer transform hover:-translate-y-0.5"
+                                >
+                                  <span>🟡 Demo: 50% PARTIAL (Split)</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => applyDemoEvidence(activeGrant.grantId, ms.id, 'cut')}
+                                  className="px-3 py-1.5 bg-rose-950/70 hover:bg-rose-900 border border-rose-500/50 hover:border-rose-400 text-rose-300 rounded-lg text-[11px] font-bold font-sans flex items-center space-x-1.5 transition-all shadow-sm cursor-pointer transform hover:-translate-y-0.5"
+                                >
+                                  <span>🔴 Demo: 0% CUT (Refund)</span>
+                                </button>
+                              </div>
+                            </div>
+
                             {/* Progress Report Text Area */}
                             <div className="space-y-1.5">
                               <label className="block text-xs font-mono text-zinc-400 uppercase font-bold">1. Progress Report & Deliverable Summary</label>
