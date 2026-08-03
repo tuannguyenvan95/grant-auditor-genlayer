@@ -517,7 +517,7 @@ export function App() {
 
     const targetGrant = grants.find(g => g.grantId === grantId);
     if (targetGrant && account.toLowerCase() !== targetGrant.grantee.toLowerCase()) {
-      alert(`🛑 SAI VÍ NỘP BÀI (ACCESS DENIED)!\n\nBạn đang dùng ví Funder / Người tạo: ${account}\n\nTheo quy định Hợp đồng thông minh trên Blockchain thật (On-Chain Access Control), CHỈ CÓ VÍ GRANTEE ĐƯỢC CHỈ ĐỊNH (${targetGrant.grantee}) mới có quyền Nộp Bài cho Job này!\n\n👉 Vui lòng đổi sang ví Grantee trên MetaMask rồi thử lại.`);
+      alert(`🛑 ACCESS CONTROL DENIED!\n\nYou are connected with wallet: ${account}\n\nPer On-Chain Smart Contract validation, ONLY THE DESIGNATED GRANTEE (${targetGrant.grantee}) is authorized to submit proof for this milestone.\n\n👉 Please switch to the Grantee wallet in MetaMask and try again.`);
       return;
     }
     if (!report || report.trim().length < 10) {
@@ -1382,17 +1382,17 @@ export function App() {
                               <div className="p-3.5 bg-amber-950/70 border border-amber-500/60 rounded-xl flex items-start space-x-3 font-sans text-xs sm:text-sm text-amber-200 shadow-md">
                                 <AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
                                 <div className="space-y-1">
-                                  <span className="font-extrabold text-amber-300 uppercase block font-mono tracking-wider">🔒 CẢNH BÁO QUYỀN NỘP BÀI (ROLE ACCESS CONTROL)</span>
+                                  <span className="font-extrabold text-amber-300 uppercase block font-mono tracking-wider">🔒 ROLE ACCESS CONTROL WARNING (NON-GRANTEE WALLET)</span>
                                   <div className="leading-relaxed text-xs">
-                                    Bạn đang kết nối bằng ví <code className="bg-black/50 px-1.5 py-0.5 rounded text-white font-mono">{account.slice(0, 10)}...{account.slice(-6)}</code> (Ví Người Tạo / Quỹ DAO). Theo quy định Hợp đồng Thông minh trên Blockchain thật, <strong>CHỈ CÓ VÍ GRANTEE ({activeGrant.grantee.slice(0, 10)}...{activeGrant.grantee.slice(-6)})</strong> mới được phép Nộp Bài cho Job này.
-                                    <div className="text-amber-300 font-bold mt-1">👉 Hãy mở MetaMask chuyển sang đúng ví Grantee trước khi bấm nút "Submit Proof On-Chain"!</div>
+                                    You are currently connected as <code className="bg-black/50 px-1.5 py-0.5 rounded text-white font-mono">{account.slice(0, 10)}...{account.slice(-6)}</code> (Funder / Observer). Per GenLayer on-chain smart contract consensus rules, <strong>ONLY THE DESIGNATED GRANTEE ({activeGrant.grantee.slice(0, 10)}...{activeGrant.grantee.slice(-6)})</strong> is permitted to submit deliverables for this milestone.
+                                    <div className="text-amber-300 font-bold mt-1">👉 Please switch your MetaMask active account to the Grantee address before clicking "Submit Proof On-Chain".</div>
                                   </div>
                                 </div>
                               </div>
                             ) : (
                               <div className="p-3 bg-emerald-950/50 border border-emerald-500/50 rounded-xl flex items-center space-x-2.5 font-mono text-xs text-emerald-300 shadow-inner">
                                 <Sparkles className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-                                <span>👑 QUYỀN HỢP LỆ: Bạn đang ở đúng Ví Grantee ({activeGrant.grantee.slice(0, 8)}...). Bạn có đủ thẩm quyền ký xác nhận Nộp Bài lên Blockchain!</span>
+                                <span>👑 AUTHORIZED ROLE: You are connected with the designated Grantee wallet ({activeGrant.grantee.slice(0, 8)}...). You have full on-chain permissions to submit evidence!</span>
                               </div>
                             )}
 
