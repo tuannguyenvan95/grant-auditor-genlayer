@@ -233,8 +233,8 @@ export function App() {
     };
     checkWallet();
 
-    // Sync grants from blockchain
-    const syncGrants = async () => {
+    // Sync grants from blockchain with deep merging and auto-polling
+    const syncGrants = async (verbose: boolean = false) => {
       try {
         const client = getGenLayerClient();
         const rawJson = await client.readContract({
@@ -249,27 +249,41 @@ export function App() {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const onChainGrants: Grant[] = onChainData.map((c: any) => {
           const totalAmt = Number(BigInt(c.total_amount) / WEI_MULTIPLIER);
-            let title = `On-Chain Initiative #${c.id}`;
-            let propUrl = c.proposal_url;
-            if (c.proposal_url && c.proposal_url.includes('|||')) {
-              const parts = c.proposal_url.split('|||');
-              title = parts[0];
-              propUrl = parts[1];
-            }
-            return {
-              grantId: `#VAULT-OC-${String(c.id).padStart(4, '0')}`,
-              onChainId: String(c.id),
-              title: title,
-              category: "On-Chain Deployed",
-              funder: c.funder,
-              grantee: c.grantee,
-              proposalUrl: propUrl,
-              totalAmount: totalAmt,
+          let title = `On-Chain Initiative #${c.id}`;
+          let propUrl = c.proposal_url;
+          if (c.proposal_url && c.proposal_url.includes('|||')) {
+            const parts = c.proposal_url.split('|||');
+            title = parts[0];
+            propUrl = parts[1];
+          }
+          return {
+            grantId: `#VAULT-OC-${String(c.id).padStart(4, '0')}`,
+            onChainId: String(c.id),
+            title: title,
+            category: "On-Chain Deployed",
+            funder: c.funder,
+            grantee: c.grantee,
+            proposalUrl: propUrl,
+            totalAmount: totalAmt,
             isSettled: c.status === "CLOSED",
             createdAt: "Synced from GenLayer",
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             milestones: c.milestones.map((m: any) => {
               const msAmt = Number(BigInt(m.amount) / WEI_MULTIPLIER);
+              let defaultVerdict = "See Contract Status";
+              let defaultReason = "Synced from blockchain.";
+              if (m.status === 'PENDING') {
+                defaultVerdict = "Awaiting Deliverable Submission";
+              } else if (m.status === 'APPROVED') {
+                defaultVerdict = "RELEASE (100%)";
+                defaultReason = "GenLayer subjective consensus verified that the submitted evidence fulfills the proposal requirements.";
+              } else if (m.status === 'PARTIAL') {
+                defaultVerdict = "PARTIAL (50%)";
+                defaultReason = "GenLayer consensus determined partial completion of specified deliverables.";
+              } else if (m.status === 'CUT') {
+                defaultVerdict = "CUT (0%)";
+                defaultReason = "GenLayer subjective consensus rejected the submitted proof of work.";
+              }
               return {
                 id: Number(m.id) + 1,
                 title: `Milestone Tranche #${Number(m.id) + 1} (${Math.round((msAmt / totalAmt) * 100)}%)`,
@@ -278,8 +292,8 @@ export function App() {
                 status: m.status,
                 progressReport: "",
                 evidenceUrl: m.evidence_url,
-                llmVerdict: m.status === 'PENDING' ? "Awaiting Deliverable Submission" : "See Contract Status",
-                llmReasoning: "Synced from blockchain."
+                llmVerdict: defaultVerdict,
+                llmReasoning: defaultReason
               };
             })
           };
@@ -287,17 +301,66 @@ export function App() {
         
         if (onChainGrants.length > 0) {
           setGrants(prev => {
-            const existingIds = new Set(prev.map(p => p.onChainId).filter(Boolean));
-            const newGrants = onChainGrants.filter(g => !existingIds.has(g.onChainId)).reverse();
-            return [...newGrants, ...prev];
+            const prevByOnChainId = new Map(prev.filter(p => p.onChainId).map(p => [p.onChainId, p]));
+            
+            // Deep merge on-chain status into existing state so real-time evaluations reflect instantly across browser tabs
+            const updatedOnChainGrants = onChainGrants.map(ocg => {
+              const existing = prevByOnChainId.get(ocg.onChainId);
+              if (!existing) return ocg;
+              
+              const mergedMilestones = ocg.milestones.map(ocm => {
+                const exM = existing.milestones.find(em => em.id === ocm.id);
+                if (!exM) return ocm;
+                
+                let verdict = exM.llmVerdict;
+                let reasoning = exM.llmReasoning;
+                let report = exM.progressReport || ocm.progressReport;
+                
+                if (ocm.status !== exM.status) {
+                  verdict = ocm.llmVerdict;
+                  reasoning = ocm.llmReasoning;
+                  if (!report && ocm.status !== 'PENDING' && ocm.status !== 'SUBMITTED') {
+                    report = "Deliverable execution and evidence verified on-chain via GenLayer nodes.";
+                  }
+                }
+                
+                return {
+                  ...exM,
+                  status: ocm.status,
+                  evidenceUrl: ocm.evidenceUrl || exM.evidenceUrl,
+                  progressReport: report,
+                  llmVerdict: verdict,
+                  llmReasoning: reasoning
+                };
+              });
+
+              const allDone = mergedMilestones.every(m => ['APPROVED', 'PARTIAL', 'CUT', 'ESCALATED'].includes(m.status));
+              return {
+                ...existing,
+                isSettled: ocg.isSettled || allDone,
+                milestones: mergedMilestones
+              };
+            });
+
+            const onChainIds = new Set(updatedOnChainGrants.map(g => g.onChainId));
+            const nonOnChainGrants = prev.filter(p => !p.onChainId || !onChainIds.has(p.onChainId));
+            
+            return [...updatedOnChainGrants.reverse(), ...nonOnChainGrants];
           });
-          addLog(`Synchronized ${onChainGrants.length} grants from blockchain.`, "SUCCESS");
+          if (verbose) {
+            addLog(`Synchronized ${onChainGrants.length} grants from blockchain.`, "SUCCESS");
+          }
         }
       } catch (e) {
         console.error("Failed to sync grants", e);
       }
     };
-    syncGrants();
+    
+    syncGrants(true);
+    const pollInterval = setInterval(() => {
+      syncGrants(false);
+    }, 6000);
+    return () => clearInterval(pollInterval);
   }, []);
 
   useEffect(() => {
