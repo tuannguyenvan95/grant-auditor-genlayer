@@ -10,7 +10,9 @@ class Milestone:
     id: str
     amount: bigint
     evidence_url: str
-    status: str  # PENDING, SUBMITTED, APPROVED, PARTIAL, CUT, ESCALATED
+    status: str  # PENDING, SUBMITTED, APPROVED, PARTIAL, CUT, ESCALATED, RETRY
+    attempts: bigint
+    reason: str
 
 @allow_storage
 @dataclass
@@ -31,6 +33,23 @@ class Contract(gl.Contract):
     def __init__(self):
         # Do NOT reassign TreeMap or DynArray in __init__
         self.next_grant_id = bigint(1)
+
+    def _milestone_key(self, grant_id: str, milestone_id: str) -> str:
+        return f"{grant_id}_{milestone_id}"
+
+    def _is_terminal_status(self, status: str) -> bool:
+        return status in ["APPROVED", "PARTIAL", "CUT"]
+
+    def _maybe_close_grant(self, grant_id: str, grant: Grant) -> None:
+        total_ms = int(str(grant.num_milestones))
+        for i in range(total_ms):
+            ms_key = self._milestone_key(grant_id, str(i))
+            if ms_key not in self.milestones:
+                continue
+            if not self._is_terminal_status(self.milestones[ms_key].status):
+                return
+        grant.status = "CLOSED"
+        self.grants[grant_id] = grant
 
     @gl.public.write.payable
     def create_grant(self, grantee: str, proposal_url: str, milestone_amounts_str: str) -> str:
@@ -57,9 +76,11 @@ class Contract(gl.Contract):
             
         total_amount = bigint(total_calc)
         
-        # Check value locked
+        # Require exact escrow amount for all milestones
         if gl.message.value < total_amount:
             raise UserError(f"Insufficient funds sent. Expected {str(total_amount)}, got {str(gl.message.value)}.")
+        if gl.message.value > total_amount:
+            raise UserError(f"Exact milestone escrow required. Expected {str(total_amount)}, got {str(gl.message.value)}.")
 
         grant_id = str(self.next_grant_id)
         self.next_grant_id += bigint(1)
@@ -70,7 +91,9 @@ class Contract(gl.Contract):
                 id=str(i),
                 amount=bigint(val),
                 evidence_url="",
-                status="PENDING"
+                status="PENDING",
+                attempts=bigint(0),
+                reason="Awaiting deliverable submission."
             )
 
         new_grant = Grant(
@@ -102,14 +125,19 @@ class Contract(gl.Contract):
             raise UserError("Milestone not found.")
             
         ms = self.milestones[ms_key]
-        if ms.status != "PENDING":
-            raise UserError(f"Milestone cannot be submitted. Current status: {ms.status} (preventing double claim).")
+        if ms.status not in ["PENDING", "RETRY", "ESCALATED"]:
+            raise UserError(f"Milestone cannot be submitted in status: {ms.status}. Either already submitted/approved or permanently closed.")
             
         if not evidence_url or not str(evidence_url).strip():
             raise UserError("Evidence URL cannot be empty.")
             
+        ms.attempts += bigint(1)
+        if ms.attempts > bigint(3):
+            raise UserError("Maximum 3 submission attempts reached for this milestone. Permanently locked.")
+            
         ms.evidence_url = str(evidence_url).strip()
         ms.status = "SUBMITTED"
+        ms.reason = f"Evidence submitted (Attempt {int(str(ms.attempts))}/3). Awaiting on-chain AI consensus adjudication."
         self.milestones[ms_key] = ms
         return "EVIDENCE_SUBMITTED"
 
@@ -189,15 +217,14 @@ class Contract(gl.Contract):
                 return {"verdict": "CUT", "confidence": 100, "reason": "Fallback to CUT on JSON parse error"}
 
         def validator_fn(leader_res) -> bool:
-            if not isinstance(leader_res, gl.vm.Return):
-                return False
-            leader_data = leader_res.calldata if hasattr(leader_res, "calldata") else leader_res
+            leader_data = leader_res
+            if hasattr(leader_res, "calldata"):
+                leader_data = leader_res.calldata
             if not isinstance(leader_data, dict):
                 try:
                     leader_data = self._parse_llm_json(str(leader_data))
                 except Exception:
-                    leader_data = {"verdict": "CUT"}
-                    
+                    leader_data = {"verdict": "CUT", "confidence": 100, "reason": "Invalid nondeterministic response"}
             mine_data = leader_fn()
             v_leader = str(leader_data.get("verdict", "")).upper().strip()
             v_mine = str(mine_data.get("verdict", "")).upper().strip()
@@ -227,38 +254,36 @@ class Contract(gl.Contract):
         if verdict == "RELEASE":
             payout_amount = amount
             ms.status = "APPROVED"
+            ms.reason = f"✓ [RELEASE (100%)] AI Consensus approved (Attempt {int(str(ms.attempts))}/3): {reason}"
             gl.get_contract_at(Address(str(grant.grantee))).emit_transfer(value=amount)
         elif verdict == "PARTIAL":
             half = amount // bigint(2)
             rem = amount - half
             payout_amount = half
             ms.status = "PARTIAL"
+            ms.reason = f"⚠️ [PARTIAL (50%)] Partial fulfillment verified (Attempt {int(str(ms.attempts))}/3): {reason}"
             if half > bigint(0):
                 gl.get_contract_at(Address(str(grant.grantee))).emit_transfer(value=half)
             if rem > bigint(0):
                 gl.get_contract_at(Address(str(grant.funder))).emit_transfer(value=rem)
         elif verdict == "CUT":
-            payout_amount = bigint(0)
-            ms.status = "CUT"
-            gl.get_contract_at(Address(str(grant.funder))).emit_transfer(value=amount)
+            if ms.attempts < bigint(3):
+                payout_amount = bigint(0)
+                ms.status = "RETRY"
+                ms.reason = f"🔄 [REJECTED - Attempt {int(str(ms.attempts))}/3] {reason} | Milestone reset for resubmission after 1-minute cooldown."
+            else:
+                payout_amount = bigint(0)
+                ms.status = "CUT"
+                ms.reason = f"🚫 [PERMANENTLY CLOSED - 3/3 Attempts Failed] {reason} | 100% Escrow Refunded back to Funder."
+                gl.get_contract_at(Address(str(grant.funder))).emit_transfer(value=amount)
         else:
             verdict = "ESCALATE"
             ms.status = "ESCALATED"
-            # Escalate leaves funds locked in contract for human resolution
+            ms.reason = f"🚨 [ESCALATED TO DAO] {reason}"
+            # Escalate leaves funds locked in contract for resolution
 
         self.milestones[ms_key] = ms
-        
-        # Check if all milestones completed or terminated to close grant
-        all_done = True
-        total_ms = int(str(grant.num_milestones))
-        for i in range(total_ms):
-            k = f"{grant_id}_{i}"
-            if k in self.milestones and self.milestones[k].status in ["PENDING", "SUBMITTED"]:
-                all_done = False
-                break
-        if all_done:
-            grant.status = "CLOSED"
-            self.grants[grant_id] = grant
+        self._maybe_close_grant(grant_id, grant)
 
         return json.dumps({"verdict": verdict, "reason": reason, "confidence": confidence, "payout": str(payout_amount)})
 
@@ -293,7 +318,9 @@ class Contract(gl.Contract):
                     "id": m.id,
                     "amount": str(m.amount),
                     "evidence_url": m.evidence_url,
-                    "status": m.status
+                    "status": m.status,
+                    "attempts": str(m.attempts),
+                    "reason": m.reason
                 })
                 
         res = {
@@ -326,7 +353,9 @@ class Contract(gl.Contract):
                             "id": m.id,
                             "amount": str(m.amount),
                             "evidence_url": m.evidence_url,
-                            "status": m.status
+                            "status": m.status,
+                            "attempts": str(m.attempts),
+                            "reason": m.reason
                         })
                 res.append({
                     "id": g.id,
