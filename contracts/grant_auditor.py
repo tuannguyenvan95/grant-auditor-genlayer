@@ -170,7 +170,7 @@ class Contract(gl.Contract):
                 else:
                     prop_text = "No proposal URL provided."
             except Exception as e:
-                prop_text = f"404 placeholder or network error for proposal: {str(e)}"
+                prop_text = f"WEB_EXTRACTION_ERROR: Unable to render proposal URL: {str(e)}"
                 
             try:
                 if evidence_str:
@@ -179,7 +179,7 @@ class Contract(gl.Contract):
                 else:
                     ev_text = "No evidence URL provided."
             except Exception as e:
-                ev_text = f"404 placeholder or network error for evidence: {str(e)}"
+                ev_text = f"WEB_EXTRACTION_ERROR: Unable to render evidence URL: {str(e)}"
 
             prompt = f"""
             You are an expert grant auditor and judge for a decentralized DAO on the GenLayer network.
@@ -196,13 +196,14 @@ class Contract(gl.Contract):
             Rules for verdict:
             - RELEASE: The evidence clearly proves completion of the milestone requirements.
             - PARTIAL: The evidence proves partial completion or minor deliverables are missing.
-            - CUT: The evidence clearly fails to prove completion, is fake/irrelevant, or is a 404/dummy URL.
-            - ESCALATE: The evidence is contradictory, unclear, or you cannot confidently determine completion.
+            - CUT: The work submitted is definitively fraudulent, intentionally incorrect, or clearly contradicts the grant goals.
+            - ESCALATE: The evidence is contradictory, ambiguous, or requires human arbitration.
+            - RETRY: Minor formatting errors or incomplete deliverables that can be resubmitted.
             
-            CRITICAL RULE: If either the proposal or the submitted evidence appears to be a 404 error page, example domain placeholder, or mock/dummy testing URL that cannot be verified, you MUST output verdict "CUT" with confidence 100 and reason "Dummy/404 URLs cannot be verified as proof of work".
+            CRITICAL ESCROW PROTECTION RULE (MANDATORY): If either the proposal or submitted evidence contains "WEB_EXTRACTION_ERROR", a 404 error page, network timeout, unparseable summary structure, or an unreachable placeholder domain during extraction, you MUST NEVER return "CUT" (because CUT would improperly refund the Funder when work may be valid or temporary network failures occur). Instead, you MUST output verdict "ESCALATE" with confidence 100 and reason "Data extraction or network error during consensus rendering; escrowed funds are preserved and frozen in contract for safety and arbitration without improper customer refund."
             
             You MUST respond with ONLY a JSON object in this exact format:
-            {{"verdict": "RELEASE|PARTIAL|CUT|ESCALATE", "confidence": 100, "reason": "detailed explanation of your decision"}}
+            {{"verdict": "RELEASE|PARTIAL|CUT|ESCALATE|RETRY", "confidence": 100, "reason": "detailed explanation of your decision"}}
             """
             
             res = gl.nondet.exec_prompt(prompt, response_format="json")
@@ -214,7 +215,7 @@ class Contract(gl.Contract):
                 text = res.content if hasattr(res, "content") else str(res)
                 return self._parse_llm_json(text)
             except Exception:
-                return {"verdict": "CUT", "confidence": 100, "reason": "Fallback to CUT on JSON parse error"}
+                return {"verdict": "ESCALATE", "confidence": 100, "reason": "Escalated due to AI execution or JSON parse error to preserve escrowed funds without improper customer refund."}
 
         def validator_fn(leader_res) -> bool:
             leader_data = leader_res
@@ -224,7 +225,7 @@ class Contract(gl.Contract):
                 try:
                     leader_data = self._parse_llm_json(str(leader_data))
                 except Exception:
-                    leader_data = {"verdict": "CUT", "confidence": 100, "reason": "Invalid nondeterministic response"}
+                    leader_data = {"verdict": "ESCALATE", "confidence": 100, "reason": "Invalid nondeterministic response; escrow preserved in contract."}
             mine_data = leader_fn()
             v_leader = str(leader_data.get("verdict", "")).upper().strip()
             v_mine = str(mine_data.get("verdict", "")).upper().strip()
@@ -266,6 +267,10 @@ class Contract(gl.Contract):
                 gl.get_contract_at(Address(str(grant.grantee))).emit_transfer(value=half)
             if rem > bigint(0):
                 gl.get_contract_at(Address(str(grant.funder))).emit_transfer(value=rem)
+        elif verdict == "RETRY":
+            payout_amount = bigint(0)
+            ms.status = "RETRY"
+            ms.reason = f"🔄 [RETRY REQUESTED - Attempt {int(str(ms.attempts))}/3] {reason} | Milestone reset for resubmission after 1-minute cooldown."
         elif verdict == "CUT":
             if ms.attempts < bigint(3):
                 payout_amount = bigint(0)
@@ -279,8 +284,8 @@ class Contract(gl.Contract):
         else:
             verdict = "ESCALATE"
             ms.status = "ESCALATED"
-            ms.reason = f"🚨 [ESCALATED TO DAO] {reason}"
-            # Escalate leaves funds locked in contract for resolution
+            ms.reason = f"🚨 [ESCALATED TO DAO - ESCROW PRESERVED] {reason}"
+            # Escalate leaves funds locked in contract for resolution without improper customer refund for resolution
 
         self.milestones[ms_key] = ms
         self._maybe_close_grant(grant_id, grant)

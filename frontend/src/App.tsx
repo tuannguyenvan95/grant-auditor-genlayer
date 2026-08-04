@@ -31,7 +31,8 @@ import {
   Percent,
   Share2,
   MessageSquare,
-  ShieldCheck
+  ShieldCheck,
+  RefreshCw
 } from 'lucide-react';
 import { createClient, createAccount } from 'genlayer-js';
 import { studionet } from 'genlayer-js/chains';
@@ -45,10 +46,10 @@ declare global {
 }
 
 // GenLayer Contract Address for GrantAuditor (Synchronized with latest on-chain deployment)
-const CONTRACT_ADDRESS = '0x10216892A7793a2c5FF2c2a35D537618Be03A777';
+const CONTRACT_ADDRESS = import.meta.env.VITE_CONTRACT_ADDRESS || '0xEE6FaaA2F62deA104D0Ba89FD521e78a92c31ff0';
 const EXPLORER_BASE_URL = "https://explorer-studio.genlayer.com";
 
-type VerdictStatus = 'PENDING' | 'SUBMITTED' | 'APPROVED' | 'PARTIAL' | 'CUT' | 'ESCALATED';
+type VerdictStatus = 'PENDING' | 'SUBMITTED' | 'APPROVED' | 'PARTIAL' | 'CUT' | 'ESCALATED' | 'RETRY';
 
 interface Milestone {
   id: number;
@@ -62,6 +63,8 @@ interface Milestone {
   llmReasoning?: string;
   confidenceScore?: number;
   payoutExecuted?: string;
+  attempts?: number;
+  cooldownExpiresAt?: number;
 }
 
 interface Grant {
@@ -167,6 +170,7 @@ export function App() {
   const [isHowItWorksOpen, setIsHowItWorksOpen] = useState(false);
   const [isBotOpen, setIsBotOpen] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [currentTime, setCurrentTime] = useState<number>(Date.now());
 
   // Bot Oracle Chat State
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
@@ -271,19 +275,28 @@ export function App() {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             milestones: c.milestones.map((m: any) => {
               const msAmt = Number(BigInt(m.amount) / WEI_MULTIPLIER);
+              const attempts = Number(m.attempts || 0);
+              const chainReason = m.reason && m.reason !== "Awaiting deliverable submission." ? m.reason : undefined;
               let defaultVerdict = "See Contract Status";
-              let defaultReason = "Synced from blockchain.";
+              let defaultReason = chainReason || "Synced from blockchain.";
               if (m.status === 'PENDING') {
-                defaultVerdict = "Awaiting Deliverable Submission";
+                defaultVerdict = attempts > 0 ? `Awaiting Resubmission (Attempt ${attempts}/3)` : "Awaiting Deliverable Submission";
+                defaultReason = chainReason || "Awaiting deliverable submission.";
               } else if (m.status === 'APPROVED') {
-                defaultVerdict = "RELEASE (100%)";
-                defaultReason = "GenLayer subjective consensus verified that the submitted evidence fulfills the proposal requirements.";
+                defaultVerdict = "DONE - RELEASE (100%)";
+                defaultReason = chainReason || "GenLayer subjective consensus verified that the submitted evidence fulfills the proposal requirements.";
               } else if (m.status === 'PARTIAL') {
-                defaultVerdict = "PARTIAL (50%)";
-                defaultReason = "GenLayer consensus determined partial completion of specified deliverables.";
+                defaultVerdict = "DONE - PARTIAL (50%)";
+                defaultReason = chainReason || "GenLayer consensus determined partial completion of specified deliverables.";
+              } else if (m.status === 'RETRY') {
+                defaultVerdict = `REJECTED (Attempt ${attempts}/3) - 1m Cooldown Active`;
+                defaultReason = chainReason || `AI Adjudication rejected deliverable (Attempt ${attempts}/3). Milestone reset for retry after 1 minute cooldown.`;
               } else if (m.status === 'CUT') {
-                defaultVerdict = "CUT (0%)";
-                defaultReason = "GenLayer subjective consensus rejected the submitted proof of work.";
+                defaultVerdict = attempts >= 3 ? "CLOSED (Max 3 Rejections Exceeded)" : "CUT (0%)";
+                defaultReason = chainReason || "GenLayer subjective consensus rejected the submitted proof of work. Escrow refunded to Funder.";
+              } else if (m.status === 'SUBMITTED') {
+                defaultVerdict = `SUBMITTED (Attempt ${attempts || 1}/3) - Ready for AI Judge`;
+                defaultReason = chainReason || "Evidence submitted on-chain. Awaiting validator execution of gl.nondet.exec_prompt.";
               }
               return {
                 id: Number(m.id) + 1,
@@ -294,7 +307,8 @@ export function App() {
                 progressReport: "",
                 evidenceUrl: m.evidence_url,
                 llmVerdict: defaultVerdict,
-                llmReasoning: defaultReason
+                llmReasoning: defaultReason,
+                attempts: attempts
               };
             })
           };
@@ -320,6 +334,7 @@ export function App() {
                 let targetStatus = ocm.status;
                 const statusWeight: Record<string, number> = {
                   'PENDING': 0,
+                  'RETRY': 0,
                   'SUBMITTED': 1,
                   'APPROVED': 2,
                   'PARTIAL': 2,
@@ -331,21 +346,37 @@ export function App() {
                   targetStatus = exM.status;
                 }
 
-                if (targetStatus !== exM.status) {
+                if (targetStatus !== exM.status || targetStatus === 'RETRY') {
                   verdict = ocm.llmVerdict;
                   reasoning = ocm.llmReasoning;
-                  if (!report && targetStatus !== 'PENDING' && targetStatus !== 'SUBMITTED') {
+                  if (!report && targetStatus !== 'PENDING' && targetStatus !== 'SUBMITTED' && targetStatus !== 'RETRY') {
                     report = "Deliverable execution and evidence verified on-chain via GenLayer nodes.";
                   }
                 }
                 
+                const attempts = ocm.attempts ?? exM.attempts ?? 0;
+                let cooldownExpiresAt = exM.cooldownExpiresAt;
+                if (targetStatus === 'RETRY') {
+                  const storageKey = `cooldown_${ocg.onChainId}_${ocm.id}_${attempts}`;
+                  const saved = localStorage.getItem(storageKey);
+                  if (!saved) {
+                    const expire = Date.now() + 60000; // 1 minute cooldown
+                    localStorage.setItem(storageKey, String(expire));
+                    cooldownExpiresAt = expire;
+                  } else {
+                    cooldownExpiresAt = Number(saved);
+                  }
+                }
+
                 return {
                   ...exM,
                   status: targetStatus,
+                  attempts: attempts,
+                  cooldownExpiresAt: cooldownExpiresAt,
                   evidenceUrl: ocm.evidenceUrl || exM.evidenceUrl,
                   progressReport: report,
-                  llmVerdict: verdict,
-                  llmReasoning: reasoning
+                  llmVerdict: verdict || ocm.llmVerdict,
+                  llmReasoning: reasoning || ocm.llmReasoning
                 };
               });
 
@@ -358,7 +389,18 @@ export function App() {
             });
 
             const onChainIds = new Set(updatedOnChainGrants.map(g => g.onChainId));
-            const nonOnChainGrants = prev.filter(p => !p.onChainId || !onChainIds.has(p.onChainId));
+            const nonOnChainGrants = prev.filter(p => {
+              if (p.onChainId && onChainIds.has(p.onChainId)) return false;
+              // Reconcile and clean up temporary local vaults once their on-chain counterpart arrives
+              const matchedOnChain = updatedOnChainGrants.find(og => og.title === p.title && og.totalAmount === p.totalAmount && og.funder.toLowerCase() === p.funder.toLowerCase());
+              if (matchedOnChain) {
+                if (selectedGrantId === p.grantId) {
+                  setTimeout(() => setSelectedGrantId(matchedOnChain.grantId), 10);
+                }
+                return false;
+              }
+              return true;
+            });
             
             return [...updatedOnChainGrants.reverse(), ...nonOnChainGrants];
           });
@@ -375,8 +417,14 @@ export function App() {
     const pollInterval = setInterval(() => {
       syncGrants(false);
     }, 6000);
-    return () => clearInterval(pollInterval);
-  }, []);
+    const timerInterval = setInterval(() => {
+      setCurrentTime(Date.now());
+    }, 1000);
+    return () => {
+      clearInterval(pollInterval);
+      clearInterval(timerInterval);
+    };
+  }, [selectedGrantId]);
 
   useEffect(() => {
     if (isBotOpen && chatEndRef.current) {
@@ -702,36 +750,19 @@ export function App() {
     setValidatorProgress(1);
     addLog(`[Consensus] Initializing GenVM Nondet AI Adjudicator for ${grant.grantId} Tranche #${milestone.id}...`, "CONSENSUS");
 
-    // FIX #1 & #2: Resolve real on-chain IDs
+    // Resolve real on-chain IDs
     const contractGrantId = grant.onChainId || grant.grantId;
     const contractMilestoneId = String(milestone.id - 1);
 
-    // Phase 1: Render Proposal
-    setActiveStepText("Phase 1/4: Leader node invoking gl.nondet.web.render on original Proposal specifications...");
-    await new Promise(r => setTimeout(r, 1300));
-    setValidatorProgress(3);
-    addLog(`[Web Render] Proposal requirements extracted from ${grant.proposalUrl}`, "INFO");
+    // Strictly On-Chain Execution (No simulated timers or mock UI success paths)
+    setActiveStepText("Broadcasting adjudication call to GenLayer Studionet nodes & awaiting real BFT subjective consensus...");
+    setValidatorProgress(5);
+    addLog(`[On-Chain Execution] Invoking adjudicate_milestone(${contractGrantId}, ${contractMilestoneId}) across GenLayer validator nodes...`, "INFO");
 
-    // Phase 2: Render Evidence & Report
-    setActiveStepText("Phase 2/4: Performing headless render & DOM extraction on submitted deliverable proof & report...");
-    await new Promise(r => setTimeout(r, 1500));
-    setValidatorProgress(6);
-    addLog(`[Web Render] Code changes and functional proofs extracted from ${milestone.evidenceUrl}`, "INFO");
-
-    // Phase 3: Consensus Evaluation (Evaluating the 4 outcomes)
-    setActiveStepText("Phase 3/4: Validator cluster running gl.nondet.exec_prompt across 4 outcomes: RELEASE | PARTIAL | CUT | ESCALATE...");
-    await new Promise(r => setTimeout(r, 2000));
-    setValidatorProgress(9);
-
-    // Phase 4: Escrow Unlock
-    setActiveStepText("Phase 4/4: Executing actual on-chain token transfer according to AI verdict...");
-    await new Promise(r => setTimeout(r, 900));
-
-    // FIX #4: Parse real verdict from contract response instead of hardcoding RELEASE
-    let realVerdict = 'RELEASE';
-    let realReason = 'GenLayer subjective consensus verified that the submitted evidence fulfills the proposal requirements.';
-    let realConfidence = 99;
-    let realPayout = String(milestone.amount);
+    let realVerdict = 'ESCALATE';
+    let realReason = 'Awaiting verified on-chain consensus output.';
+    let realConfidence = 100;
+    let realPayout = "0";
 
     try {
       const client = getGenLayerClient();
@@ -774,7 +805,7 @@ export function App() {
           throw new Error(errorMsg);
         }
 
-        addLog(`Real on-chain escrow payout executed! TX: ${txHash}`, "SUCCESS", txHash);
+        addLog(`Real on-chain consensus confirmed! TX: ${txHash}`, "SUCCESS", txHash);
 
         // Parse actual verdict JSON returned by contract
         // eslint-disable-next-line @typescript-eslint/ban-ts-comment
@@ -783,12 +814,19 @@ export function App() {
           try {
             // eslint-disable-next-line @typescript-eslint/ban-ts-comment
             // @ts-ignore
-            const parsed = JSON.parse(receipt.result);
-            realVerdict = String(parsed.verdict || 'RELEASE').toUpperCase();
-            realReason = String(parsed.reason || realReason);
-            realConfidence = Number(parsed.confidence) || 99;
-            realPayout = String(parsed.payout || milestone.amount);
-          } catch { /* use defaults if JSON parse fails */ }
+            const parsed = typeof receipt.result === 'string' ? JSON.parse(receipt.result) : receipt.result;
+            realVerdict = String(parsed.verdict || 'ESCALATE').toUpperCase();
+            realReason = String(parsed.reason || 'Consensus reached.');
+            realConfidence = Number(parsed.confidence) || 100;
+            realPayout = String(parsed.payout || "0");
+          } catch {
+            realVerdict = 'ESCALATE';
+            realReason = 'Escrow preserved in contract due to JSON parsing safety rule.';
+          }
+        } else {
+          // If result not directly attached, default to ESCALATE safety preservation
+          realVerdict = 'ESCALATE';
+          realReason = 'Transaction confirmed; awaiting background sync to update status.';
         }
       } catch (err: unknown) {
         addLog(`[Error] Adjudication failed: ${(err as Error).message || 'Unknown error'}`, "ERROR");
@@ -797,26 +835,30 @@ export function App() {
         return;
       }
 
-      addLog(`[LLM Consensus] 9/9 Validator nodes locked BFT agreement on verdict: ${realVerdict} (Confidence: ${realConfidence}%).`, "VERDICT");
+      setValidatorProgress(9);
+      addLog(`[LLM Consensus] Validator nodes locked BFT agreement on verdict: ${realVerdict} (Confidence: ${realConfidence}%).`, "VERDICT");
 
       // Map verdict to correct UI status and payout description
       const verdictToStatus: Record<string, VerdictStatus> = {
         'RELEASE': 'APPROVED',
         'PARTIAL': 'PARTIAL',
         'CUT': 'CUT',
-        'ESCALATE': 'ESCALATED'
+        'ESCALATE': 'ESCALATED',
+        'RETRY': 'RETRY'
       };
       const verdictToLabel: Record<string, string> = {
         'RELEASE': `RELEASE (100% Milestone Funds Unlocked)`,
         'PARTIAL': `PARTIAL (50% Split Execution)`,
         'CUT': `CUT (100% Escrow Refunded to Funder)`,
-        'ESCALATE': `ESCALATED (Funds Frozen for DAO Arbitration)`
+        'ESCALATE': `ESCALATED (Escrow Preserved in Contract for DAO Arbitration)`,
+        'RETRY': `RETRY REQUESTED (Milestone Reset for Resubmission)`
       };
       const verdictToPayout: Record<string, string> = {
         'RELEASE': `✓ Real On-Chain Transfer: ${milestone.amount} GEN delivered to Grantee wallet on Studionet.`,
         'PARTIAL': `✓ Real On-Chain Transfer: ${Math.floor(milestone.amount / 2)} GEN to Grantee | ${milestone.amount - Math.floor(milestone.amount / 2)} GEN Refunded to DAO Treasury.`,
         'CUT': `✓ Real On-Chain Transfer: ${milestone.amount} GEN fully returned to Funder DAO Treasury.`,
-        'ESCALATE': `🔒 Escrow Status: ${milestone.amount} GEN frozen safely in GrantAuditor smart contract.`
+        'ESCALATE': `🔒 Escrow Protected: ${milestone.amount} GEN frozen safely in GrantAuditor smart contract (No improper customer refund).`,
+        'RETRY': `🔄 Escrow Preserved: ${milestone.amount} GEN retained in vault awaiting resubmission.`
       };
 
       const finalStatus = verdictToStatus[realVerdict] || 'ESCALATED';
@@ -1185,6 +1227,7 @@ export function App() {
                 const isSelected = activeGrant.grantId === grant.grantId;
                 const completedCount = grant.milestones.filter(m => ['APPROVED', 'PARTIAL', 'CUT', 'ESCALATED'].includes(m.status)).length;
                 const hasAction = grant.milestones.some(m => m.status === 'SUBMITTED');
+                const hasRetry = grant.milestones.some(m => m.status === 'RETRY');
                 const hasCut = grant.milestones.some(m => m.status === 'CUT');
                 const hasPartial = grant.milestones.some(m => m.status === 'PARTIAL');
                 const hasEscalated = grant.milestones.some(m => m.status === 'ESCALATED');
@@ -1201,32 +1244,37 @@ export function App() {
                   >
                     <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-mono mb-2.5">
                       <span className="font-black text-cyan-400 text-sm">{grant.grantId}</span>
-                      {hasAction && (
+                      {hasRetry && (
+                        <span className="px-2.5 py-1 rounded-full text-[10px] font-mono text-amber-300 bg-amber-950/90 border border-amber-500/80 flex items-center font-extrabold animate-pulse">
+                          <RefreshCw className="w-3 h-3 mr-1 animate-spin" /> Rejected (Retry Active)
+                        </span>
+                      )}
+                      {!hasRetry && hasAction && (
                         <span className="px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase bg-indigo-500/25 text-indigo-200 border border-indigo-500/50 animate-pulse flex items-center shadow-sm">
                           <Sparkles className="w-3 h-3 mr-1 text-cyan-400" /> Ready for Judge
                         </span>
                       )}
-                      {!hasAction && hasCut && (
+                      {!hasRetry && !hasAction && hasCut && (
                         <span className="px-2.5 py-1 rounded-full text-[10px] font-mono text-rose-400 bg-rose-950/80 border border-rose-700/80 flex items-center font-extrabold">
-                          <XCircle className="w-3 h-3 mr-1" /> CUT (Refunded)
+                          <XCircle className="w-3 h-3 mr-1" /> CLOSED (Cut / Refunded)
                         </span>
                       )}
-                      {!hasAction && !hasCut && hasPartial && (
+                      {!hasRetry && !hasAction && !hasCut && hasPartial && (
                         <span className="px-2.5 py-1 rounded-full text-[10px] font-mono text-amber-300 bg-amber-950/80 border border-amber-700/80 flex items-center font-extrabold">
-                          <Percent className="w-3 h-3 mr-1" /> PARTIAL (50%)
+                          <Percent className="w-3 h-3 mr-1" /> DONE: PARTIAL (50%)
                         </span>
                       )}
-                      {!hasAction && !hasCut && !hasPartial && hasEscalated && (
+                      {!hasRetry && !hasAction && !hasCut && !hasPartial && hasEscalated && (
                         <span className="px-2.5 py-1 rounded-full text-[10px] font-mono text-indigo-300 bg-indigo-950/80 border border-indigo-700/80 flex items-center font-extrabold">
                           <AlertTriangle className="w-3 h-3 mr-1" /> ESCALATED
                         </span>
                       )}
-                      {!hasAction && !hasCut && !hasPartial && !hasEscalated && grant.isSettled && (
+                      {!hasRetry && !hasAction && !hasCut && !hasPartial && !hasEscalated && grant.isSettled && (
                         <span className="px-2.5 py-1 rounded-full text-[10px] font-mono text-emerald-400 bg-emerald-950/80 border border-emerald-700/80 flex items-center font-bold">
-                          <CheckCircle2 className="w-3 h-3 mr-1" /> Settled (100%)
+                          <CheckCircle2 className="w-3 h-3 mr-1" /> DONE: Settled (100%)
                         </span>
                       )}
-                      {!hasAction && !grant.isSettled && !hasCut && !hasPartial && !hasEscalated && (
+                      {!hasRetry && !hasAction && !grant.isSettled && !hasCut && !hasPartial && !hasEscalated && (
                         <span className="text-[11px] text-zinc-400 font-medium">{grant.category}</span>
                       )}
                     </div>
@@ -1398,6 +1446,7 @@ export function App() {
                       case 'CUT': return 'border-rose-500/50 bg-[#140e15]/95 shadow-rose-500/10';
                       case 'ESCALATED': return 'border-indigo-500/50 bg-[#0f101c]/95 shadow-indigo-500/10';
                       case 'SUBMITTED': return 'border-cyan-500/60 shadow-lg shadow-cyan-500/15 bg-[#0e1320]';
+                      case 'RETRY': return 'border-amber-500/70 bg-[#15110d]/95 shadow-lg shadow-amber-500/15';
                       default: return 'border-zinc-800/90 bg-[#0d101a]';
                     }
                   };
@@ -1415,6 +1464,7 @@ export function App() {
                             ms.status === 'PARTIAL' ? 'bg-amber-500/20 text-amber-300 border-amber-500/50' :
                             ms.status === 'CUT' ? 'bg-rose-500/20 text-rose-400 border-rose-500/50' :
                             ms.status === 'ESCALATED' ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/50' :
+                            ms.status === 'RETRY' ? 'bg-amber-500/30 text-amber-200 border-amber-500/60 animate-pulse' :
                             ms.status === 'SUBMITTED' ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/50 animate-pulse' :
                             'bg-zinc-800 text-zinc-400 border-zinc-700'
                           }`}>
@@ -1440,17 +1490,22 @@ export function App() {
                           
                           {ms.status === 'APPROVED' && (
                             <span className="px-4 py-2 rounded-xl text-xs font-mono font-extrabold uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-500/50 flex items-center shadow-md">
-                              <CheckCircle2 className="w-4 h-4 mr-1.5 text-emerald-400" /> Verdict: RELEASE (100%)
+                              <CheckCircle2 className="w-4 h-4 mr-1.5 text-emerald-400" /> ✅ DONE: RELEASE (100%)
                             </span>
                           )}
                           {ms.status === 'PARTIAL' && (
                             <span className="px-4 py-2 rounded-xl text-xs font-mono font-extrabold uppercase bg-amber-500/20 text-amber-300 border border-amber-500/50 flex items-center shadow-md">
-                              <Percent className="w-4 h-4 mr-1.5 text-amber-300" /> Verdict: PARTIAL (Split)
+                              <Percent className="w-4 h-4 mr-1.5 text-amber-300" /> ✅ DONE: PARTIAL (Split)
                             </span>
                           )}
                           {ms.status === 'CUT' && (
                             <span className="px-4 py-2 rounded-xl text-xs font-mono font-extrabold uppercase bg-rose-500/20 text-rose-300 border border-rose-500/50 flex items-center shadow-md">
-                              <XCircle className="w-4 h-4 mr-1.5 text-rose-400" /> Verdict: CUT (Refunded)
+                              <XCircle className="w-4 h-4 mr-1.5 text-rose-400" /> {(ms.attempts || 0) >= 3 ? "🚫 CLOSED: MAX 3 REJECTIONS EXCEEDED" : "🚫 CLOSED: CUT & REFUNDED"}
+                            </span>
+                          )}
+                          {ms.status === 'RETRY' && (
+                            <span className="px-4 py-2 rounded-xl text-xs font-mono font-extrabold uppercase bg-amber-500/25 text-amber-300 border border-amber-500/60 flex items-center shadow-md">
+                              <RefreshCw className="w-4 h-4 mr-1.5 text-amber-400 animate-spin" /> 🔄 REJECTED (Try {ms.attempts || 1}/3) - 1M Cooldown
                             </span>
                           )}
                           {ms.status === 'ESCALATED' && (
@@ -1472,9 +1527,35 @@ export function App() {
                       </div>
 
                       <div className="p-6 sm:p-8 space-y-6 bg-[#090b11]/95">
-                        {/* STATE 1: PENDING -> Deliverable & Progress Report Injection Console */}
-                        {ms.status === 'PENDING' && (
+                        {/* STATE 1: PENDING / RETRY -> Deliverable & Progress Report Injection Console */}
+                        {(ms.status === 'PENDING' || ms.status === 'RETRY') && (
                           <div className="space-y-4">
+                            {ms.status === 'RETRY' && (
+                              <div className="p-4 bg-amber-950/80 border-2 border-amber-500 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4 text-amber-200 shadow-xl animate-pulse">
+                                <div className="flex items-center space-x-3">
+                                  <RefreshCw className="w-6 h-6 text-amber-400 flex-shrink-0 animate-spin" />
+                                  <div>
+                                    <div className="font-extrabold text-amber-300 uppercase font-mono tracking-wide">
+                                      ⚠️ AI ADJUDICATION REJECTED THIS SUBMISSION (Attempt {ms.attempts || 1}/3)
+                                    </div>
+                                    <div className="text-xs text-zinc-300 mt-1 font-sans">
+                                      {ms.llmReasoning || "Deliverables failed verification. You have up to 3 submission attempts per milestone before permanent closure."}
+                                    </div>
+                                  </div>
+                                </div>
+                                <div className="text-right flex-shrink-0 font-mono font-bold text-xs bg-black/60 px-4 py-2 rounded-xl border border-amber-500/50">
+                                  {currentTime < (ms.cooldownExpiresAt || 0) ? (
+                                    <span className="text-rose-400 font-extrabold flex items-center gap-1.5">
+                                      <Clock className="w-4 h-4 animate-bounce" /> COOLDOWN ACTIVE: {Math.ceil(((ms.cooldownExpiresAt || 0) - currentTime) / 1000)}s left
+                                    </span>
+                                  ) : (
+                                    <span className="text-emerald-400 font-extrabold">
+                                      ✓ RESUBMISSION UNLOCKED (Try {Math.min(3, (ms.attempts || 1) + 1)} of 3)
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            )}
                             {/* Role Ownership Check & Conditional Console Display */}
                             {(!account || account.toLowerCase() !== activeGrant.grantee.toLowerCase()) ? (
                               <div className="p-4 bg-amber-950/70 border border-amber-500/60 rounded-2xl flex items-start space-x-3.5 font-sans text-xs sm:text-sm text-amber-200 shadow-md">
@@ -1567,10 +1648,10 @@ export function App() {
                                       />
                                     </div>
                                     <button
-                                      disabled={submittingKey === `${activeGrant.grantId}-${ms.id}`}
+                                      disabled={submittingKey === `${activeGrant.grantId}-${ms.id}` || (ms.status === 'RETRY' && currentTime < (ms.cooldownExpiresAt || 0))}
                                       onClick={() => handleSubmitEvidence(activeGrant.grantId, ms.id)}
                                       className={`px-8 py-3 bg-gradient-to-r ${
-                                        submittingKey === `${activeGrant.grantId}-${ms.id}`
+                                        submittingKey === `${activeGrant.grantId}-${ms.id}` || (ms.status === 'RETRY' && currentTime < (ms.cooldownExpiresAt || 0))
                                           ? 'from-zinc-700 via-zinc-800 to-zinc-900 cursor-not-allowed border border-zinc-600 text-amber-300'
                                           : 'from-cyan-500 via-indigo-600 to-indigo-700 hover:from-cyan-400 hover:to-indigo-500 text-black cursor-pointer shadow-xl transform hover:-translate-y-0.5'
                                       } font-mono font-black text-xs sm:text-sm uppercase tracking-wider rounded-xl transition-all flex items-center justify-center space-x-2 whitespace-nowrap`}
@@ -1580,9 +1661,14 @@ export function App() {
                                           <div className="w-4 h-4 border-2 border-amber-400 border-t-transparent rounded-full animate-spin flex-shrink-0"></div>
                                           <span>SUBMITTING ON-CHAIN... (Check MetaMask)</span>
                                         </>
+                                      ) : ms.status === 'RETRY' && currentTime < (ms.cooldownExpiresAt || 0) ? (
+                                        <>
+                                          <Clock className="w-4 h-4 animate-spin text-rose-400 flex-shrink-0" />
+                                          <span className="text-rose-300 font-bold">COOLDOWN ({Math.ceil(((ms.cooldownExpiresAt || 0) - currentTime) / 1000)}s) - PLEASE WAIT</span>
+                                        </>
                                       ) : (
                                         <>
-                                          <span>Submit Proof On-Chain</span>
+                                          <span>{ms.status === 'RETRY' ? `Submit Resubmission (Attempt ${Math.min(3, (ms.attempts || 1) + 1)}/3)` : "Submit Proof On-Chain"}</span>
                                           <ChevronRight className="w-4 h-4 flex-shrink-0" />
                                         </>
                                       )}
