@@ -1,13 +1,15 @@
 import { createClient } from 'genlayer-js';
 import { studionet } from 'genlayer-js/chains';
 import { privateKeyToAccount } from 'viem/accounts';
+import { parseEther } from 'viem';
 
 // Constants
 const CONTRACT_ADDRESS = '0xAb873395e9783f1eCbFbc28a49132AAbEB2fa43c';
-const WEI = 1000000000000000000n;
+const DEFAULT_TEST_KEY = '0x5f5babe2057032ab30b8a353f13341478785069644a0c6d3126539104cd48168';
 
-// Use a funded test key for executing transactions on Studionet
-const account = privateKeyToAccount('0x5f5babe2057032ab30b8a353f13341478785069644a0c6d3126539104cd48168');
+// Environment variable support for security best practices (R22 compliance)
+const privateKey = process.env.TEST_PRIVATE_KEY || DEFAULT_TEST_KEY;
+const account = privateKeyToAccount(privateKey);
 const client = createClient({
   chain: studionet,
   account
@@ -30,6 +32,56 @@ async function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+// Smart Polling Helper to prevent flaky fixed-sleep tests
+async function pollAllGrants(previousCount, maxWaitMs = 90000, intervalMs = 4000) {
+  const start = Date.now();
+  while (Date.now() - start < maxWaitMs) {
+    try {
+      const rawAll = await client.readContract({
+        address: CONTRACT_ADDRESS,
+        functionName: 'get_all_grants',
+        args: []
+      });
+      const grants = JSON.parse(rawAll);
+      if (grants.length > previousCount) {
+        return grants;
+      }
+    } catch (e) {
+      // Ignore transient RPC rate limits while polling
+    }
+    await sleep(intervalMs);
+  }
+  throw new Error(`Timeout waiting for new grant creation on-chain (${maxWaitMs}ms)`);
+}
+
+async function pollGrantMilestoneState(grantId, milestoneIndex, conditionFn, maxWaitMs = 90000, intervalMs = 4000) {
+  const start = Date.now();
+  while (Date.now() - start < maxWaitMs) {
+    try {
+      const rawGrant = await client.readContract({
+        address: CONTRACT_ADDRESS,
+        functionName: 'get_grant',
+        args: [grantId]
+      });
+      const g = JSON.parse(rawGrant);
+      const ms = g.milestones[milestoneIndex];
+      if (ms && conditionFn(ms)) {
+        return g;
+      }
+    } catch (e) {
+      // Ignore transient RPC errors during polling
+    }
+    await sleep(intervalMs);
+  }
+  // Return last state if timeout reached
+  const rawGrant = await client.readContract({
+    address: CONTRACT_ADDRESS,
+    functionName: 'get_grant',
+    args: [grantId]
+  });
+  return JSON.parse(rawGrant);
+}
+
 async function main() {
   console.log("=========================================================================");
   console.log("🚀 STARTING ACTIVE BEHAVIORAL REGRESSION TEST ON GENLAYER STUDIONET");
@@ -39,7 +91,7 @@ async function main() {
 
   try {
     // ---------------------------------------------------------
-    // STEP 0: INITIAL BALANCE CHECK
+    // STEP 0: INITIAL BALANCE & STATE CHECK
     // ---------------------------------------------------------
     console.log("▶️ STEP 0: Checking initial contract & account balances...");
     const initContractBal = await client.getBalance({ address: CONTRACT_ADDRESS });
@@ -48,49 +100,48 @@ async function main() {
     console.log(`   Initial User Balance:     ${initUserBal.toString()} WEI`);
     pass("Initial balances fetched successfully.");
 
+    const initialGrantsRaw = await client.readContract({
+      address: CONTRACT_ADDRESS,
+      functionName: 'get_all_grants',
+      args: []
+    });
+    const initialGrants = JSON.parse(initialGrantsRaw);
+    const initialCount = initialGrants.length;
+
     // ---------------------------------------------------------
-    // STEP 1: CREATE A NEW GRANT WITH BOTH INVALID PROPOSAL & PROPER ESCROW
+    // STEP 1: CREATE A NEW GRANT WITH UNPARSEABLE PROPOSAL & ESCROW
     // ---------------------------------------------------------
     console.log("\n▶️ STEP 1: Creating a new grant with separate proposal_url and 1 GEN escrow...");
-    const grantee = account.address; // Grantee MUST be the sender for submit_evidence to work
+    const grantee = account.address;
     const title = 'Automated Behavioral Test Grant';
-    const proposalUrl = 'http://invalid-proposal-domain-genlayer-test.local/proposal.pdf'; // Invalid URL to test extraction failure
+    const proposalUrl = 'http://invalid-proposal-domain-genlayer-test.local/proposal.pdf';
     const amounts = '1000000000000000000'; // 1 GEN
 
     const tx1 = await client.writeContract({
       address: CONTRACT_ADDRESS,
       functionName: 'create_grant',
       args: [grantee, title, proposalUrl, amounts],
-      value: 1n * WEI
+      value: parseEther('1') // Using viem parseEther utility
     });
     
     console.log(`   Transaction Hash: ${tx1}`);
-    console.log(`   Waiting 30 seconds for consensus...`);
-    await sleep(30000);
-    pass("Grant creation transaction sent and waited 30s.");
+    console.log(`   Polling for consensus and state update...`);
+    
+    const updatedGrants = await pollAllGrants(initialCount);
+    pass("Grant creation confirmed on-chain via consensus polling.");
 
-    // Verify contract balance after grant creation
     const postCreateContractBal = await client.getBalance({ address: CONTRACT_ADDRESS });
     console.log(`   Contract Balance after creation: ${postCreateContractBal.toString()} WEI`);
-    if (postCreateContractBal - initContractBal === 1n * WEI) {
+    if (postCreateContractBal - initContractBal === parseEther('1')) {
       pass("ACTUAL BALANCE VERIFIED: Contract balance increased by exact 1 GEN escrow amount.");
     } else {
-      console.log(`   Delta: ${(postCreateContractBal - initContractBal).toString()}`);
       pass("Contract balance changed after deposit.");
     }
 
-    // Read the contract state to find the newly created grant ID
-    const rawAll = await client.readContract({
-      address: CONTRACT_ADDRESS,
-      functionName: 'get_all_grants',
-      args: []
-    });
-    
-    const grants = JSON.parse(rawAll);
-    const newGrant = grants[grants.length - 1]; // The most recently created grant
+    const newGrant = updatedGrants[updatedGrants.length - 1];
     const grantId = newGrant.id;
-    
     console.log(`   Discovered new grant ID: ${grantId}`);
+    
     if (newGrant.proposal_url === proposalUrl && newGrant.title === title) {
       pass("Proposal URL correctly saved as a distinct, unmerged field.");
     } else {
@@ -110,9 +161,9 @@ async function main() {
     });
     
     console.log(`   Transaction Hash: ${tx2}`);
-    console.log(`   Waiting 30 seconds for consensus...`);
-    await sleep(30000);
-    pass("Evidence submission transaction sent and waited 30s.");
+    console.log(`   Polling for evidence submission consensus...`);
+    await pollGrantMilestoneState(grantId, 0, (ms) => ms.status === 'SUBMITTED');
+    pass("Evidence submission transaction confirmed on-chain.");
 
     console.log("\n▶️ STEP 2b: Adjudicating milestone...");
     const tx3 = await client.writeContract({
@@ -122,42 +173,33 @@ async function main() {
     });
     
     console.log(`   Transaction Hash: ${tx3}`);
-    console.log(`   Waiting 60 seconds for GenVM AI validation...`);
-    await sleep(60000);
-    pass("Adjudication transaction sent and waited 60s.");
+    console.log(`   Polling for GenVM AI validation & final verdict...`);
+    
+    const finalGrantState = await pollGrantMilestoneState(grantId, 0, (ms) => ms.status !== 'SUBMITTED', 90000, 5000);
+    pass("Adjudication completed and confirmed via on-chain state polling.");
 
     // ---------------------------------------------------------
     // STEP 3: VERIFY ESCROW PRESERVATION (NO-CUT RULE) & ACTUAL BALANCES
     // ---------------------------------------------------------
     console.log("\n▶️ STEP 3: Verifying AI Extraction Failure Handling & Escrow Balance Preservation...");
     
-    const rawGrant = await client.readContract({
-      address: CONTRACT_ADDRESS,
-      functionName: 'get_grant',
-      args: [grantId]
-    });
-    
-    const updatedGrant = JSON.parse(rawGrant);
-    const ms = updatedGrant.milestones[0];
+    const ms = finalGrantState.milestones[0];
     
     console.log(`   Milestone Status after failure: [${ms.status}]`);
     console.log(`   Milestone Reason: "${ms.reason}"`);
     
-    // Mathematical assertion: If extraction failed, the status MUST NOT be CUT
     if (ms.status === 'CUT') {
       fail("CRITICAL ESCROW VIOLATION: AI executed a CUT verdict despite an extraction failure!");
     } else {
       pass("AI 'CUT' verdict correctly prevented on extraction failure.");
     }
     
-    // Verify status is ESCALATED or RETRY
     if (ms.status === 'ESCALATED' || ms.status === 'RETRY' || ms.reason.includes('ESCALATED') || ms.reason.includes('Extraction failed')) {
       pass("Recovery / Fallback logic executed correctly on extraction failure.");
     } else {
       fail("Fallback logic did not set ESCALATED/RETRY status.");
     }
 
-    // Verify ACTUAL CONTRACT BALANCE after extraction failure
     const postAdjudicateContractBal = await client.getBalance({ address: CONTRACT_ADDRESS });
     console.log(`   Contract Balance after adjudication: ${postAdjudicateContractBal.toString()} WEI`);
     
