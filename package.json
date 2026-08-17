@@ -1,0 +1,28 @@
+{
+  "name": "grantauditor",
+  "version": "1.0.0",
+  "description": "GrantAuditor is an intelligent escrow and milestone adjudication system designed for DAOs and grant programs, built entirely on **GenLayer**.",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "dependencies": {
+    "genlayer-js": "^1.1.8",
+    "viem": "^2.55.13"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tuannguyenvan95/grant-auditor-genlayer.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/tuannguyenvan95/grant-auditor-genlayer/issues"
+  },
+  "homepage": "https://github.com/tuannguyenvan95/grant-auditor-genlayer#readme"
+}

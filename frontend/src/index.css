@@ -1,0 +1,113 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --bg-app: #07090f;
+    --bg-surface: #0e1118;
+    --bg-elevated: #151822;
+    --border-subtle: rgba(255, 255, 255, 0.07);
+    --border-active: rgba(56, 189, 248, 0.35);
+    --cyan-glow: rgba(56, 189, 248, 0.18);
+    --emerald-glow: rgba(16, 185, 129, 0.18);
+    --rose-glow: rgba(244, 63, 94, 0.18);
+    --amber-glow: rgba(245, 158, 11, 0.18);
+  }
+
+  body {
+    background-color: var(--bg-app);
+    color: #f3f4f6;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    overflow-x: hidden;
+    margin: 0;
+    padding: 0;
+    min-height: 100vh;
+    background-image:
+      radial-gradient(ellipse 80% 50% at 50% -20%, rgba(14, 116, 144, 0.15), transparent),
+      radial-gradient(ellipse 60% 50% at 90% 90%, rgba(16, 185, 129, 0.08), transparent),
+      linear-gradient(rgba(255, 255, 255, 0.012) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255, 255, 255, 0.012) 1px, transparent 1px);
+    background-size: 100% 100%, 100% 100%, 32px 32px, 32px 32px;
+  }
+}
+
+/* Custom scrollbars for slick workstation layout */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #08090d;
+}
+::-webkit-scrollbar-thumb {
+  background: #1e2230;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #31374a;
+}
+
+/* Architectural Workstation Design Tokens */
+.workbench-card {
+  background: rgba(13, 16, 25, 0.82);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0.95rem;
+  box-shadow: 0 12px 35px -5px rgba(0, 0, 0, 0.55);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.workbench-card:hover {
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.workbench-card-active {
+  background: rgba(18, 22, 34, 0.95);
+  border: 1px solid rgba(56, 189, 248, 0.5);
+  box-shadow: 0 0 30px -5px rgba(56, 189, 248, 0.28);
+}
+
+.surface-elevated {
+  background: #141722;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+/* Pulsing AI Consensus Animations */
+@keyframes grid-pulse {
+  0%, 100% { opacity: 0.3; transform: scale(0.99); }
+  50% { opacity: 0.85; transform: scale(1); }
+}
+
+.animate-grid-pulse {
+  animation: grid-pulse 2.5s infinite ease-in-out;
+}
+
+@keyframes float-gentle {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-4px); }
+}
+
+.animate-float {
+  animation: float-gentle 4s ease-in-out infinite;
+}
+
+.node-active-glow {
+  box-shadow: 0 0 18px rgba(56, 189, 248, 0.65);
+}
+.node-success-glow {
+  box-shadow: 0 0 18px rgba(16, 185, 129, 0.65);
+}
+
+/* Chat bubble styling for Bot Oracle */
+.chat-bubble-user {
+  background: linear-gradient(135deg, rgba(14, 116, 144, 0.4), rgba(30, 58, 138, 0.4));
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  border-radius: 1rem 1rem 0.2rem 1rem;
+}
+
+.chat-bubble-bot {
+  background: rgba(20, 24, 38, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 1rem 1rem 1rem 0.2rem;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
+}
