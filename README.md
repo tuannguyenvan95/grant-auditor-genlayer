@@ -6,7 +6,7 @@ GrantAuditor is an intelligent escrow and milestone adjudication system designed
 Grant programs often suffer from subjective milestone evaluations. GenLayer solves this by providing a decentralized, intelligent consensus mechanism (Intelligent Contracts). By using GenLayer's Nondeterministic API (`gl.nondet.web.render` and `gl.nondet.exec_prompt`), GrantAuditor can automatically fetch grant proposals and submitted evidence (from URLs like GitHub, Notion, PDFs), and use an LLM consensus to adjudicate whether the milestone has been met. If met, funds are released on-chain automatically.
 
 ## Live App
-- **Confirmed URL**: [https://grant-auditor-genlayer.vercel.app](https://grant-auditor-genlayer.vercel.app)
+- **Confirmed URL**: [https://grant-auditor-genlayer-nine.vercel.app](https://grant-auditor-genlayer-nine.vercel.app)
 
 ## Deployed Contract
 - **Studionet Address**: `0x2432E0e75995FEd62EFaA52499D969B0039B4D39`
