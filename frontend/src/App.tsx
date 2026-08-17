@@ -964,13 +964,13 @@ export function App() {
       let response = "I analyzed your query against our Studionet smart contract and GenVM Nondet architecture. GrantAuditor guarantees that every milestone deliverable is subjectively audited by an independent cluster of 9 AI validators before executing real on-chain token transfers!";
       const qLower = query.toLowerCase();
 
-      if (qLower.includes("4") || qLower.includes("verdict") || qLower.includes("outcome") || qLower.includes("khả năng") || qLower.includes("partial") || qLower.includes("cut")) {
+      if (qLower.includes("4") || qLower.includes("verdict") || qLower.includes("outcome") || qLower.includes("capability") || qLower.includes("partial") || qLower.includes("cut")) {
         response = "GrantAuditor supports 4 real on-chain adjudication outcomes:\n\n1) 🟢 RELEASE: 100% of milestone funds transferred to Grantee when evidence proves complete fulfillment.\n2) 🟡 PARTIAL: Partial split payout (e.g. 50% to Grantee, 50% refunded to DAO) for incomplete deliverables.\n3) 🔴 CUT: 0% payout to Grantee; 100% of escrowed GEN returned to DAO Treasury when evidence is fake or rejected.\n4) 🔒 ESCALATE: Funds remain frozen safely in escrow awaiting manual DAO governance vote if evidence is unclear or AI confidence < 65%.";
-      } else if (qLower.includes("work") || qLower.includes("how") || qLower.includes("hoạt động") || qLower.includes("genlayer")) {
+      } else if (qLower.includes("work") || qLower.includes("how") || qLower.includes("operation") || qLower.includes("genlayer")) {
         response = "Here is the actual on-chain workflow:\n1) DAO deploys Grant, locks real GEN tokens into contract, and provides proposal link + milestone percentage splits.\n2) Grantee submits a Progress Report + Evidence Link (GitHub PR, Notion, demo video).\n3) Any user clicks 'Adjudicate'. The contract invokes gl.nondet.web.render to fetch web DOM trees and gl.nondet.exec_prompt across 9 validator nodes.\n4) Once >67% BFT consensus is reached, the exact token transfer executes automatically on the blockchain!";
-      } else if (qLower.includes("real") || qLower.includes("mock") || qLower.includes("thật") || qLower.includes("token") || qLower.includes("money")) {
+      } else if (qLower.includes("real") || qLower.includes("mock") || qLower.includes("actual") || qLower.includes("token") || qLower.includes("money")) {
         response = "Yes! All token transfers are 100% REAL on the blockchain, not simulated! When the validator cluster emits a verdict, our contract calls emit_transfer() to physically move GEN cryptocurrency on GenLayer Studionet RPC 61999.";
-      } else if (qLower.includes("split") || qLower.includes("percent") || qLower.includes("milestone") || qLower.includes("chia")) {
+      } else if (qLower.includes("split") || qLower.includes("percent") || qLower.includes("milestone") || qLower.includes("allocation")) {
         response = "When creating an Escrow Vault, DAOs enter their Total Budget (e.g., 2,000 GEN) and specify percentage splits across milestones (e.g. '30, 40, 30'). Our workstation computes the exact tranche quantities instantly and locks the total collateral securely on-chain.";
       }
 
