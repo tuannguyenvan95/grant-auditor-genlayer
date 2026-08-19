@@ -591,10 +591,11 @@ export function App() {
         // NOT wei (2000 * 1e18). Send value in contract's native unit.
         const contractValue = amountsInWei.reduce((a, b) => a + b, 0n);
         const grantTitle = newTitle || "Custom DAO Initiative";
+        const defaultCriteria = titleArr.map(t => `${t} Deliverables and Verification`).join("|");
         txHash = await client.writeContract({
           address: CONTRACT_ADDRESS as `0x${string}`,
           functionName: 'create_grant',
-          args: [targetGrantee, grantTitle, newProposalUrl, amountsString],
+          args: [targetGrantee, grantTitle, newProposalUrl, amountsString, defaultCriteria],
           value: contractValue
         });
         addLog(`Transaction broadcasted! Awaiting block consensus... TX: ${txHash}`, "INFO", txHash);
@@ -726,10 +727,11 @@ export function App() {
     try {
       const client = getGenLayerClient();
       try {
+        const progressReport = `Milestone deliverable submitted via GrantAuditor workstation for ${grantId}`;
         const txHash = await client.writeContract({
           address: CONTRACT_ADDRESS as `0x${string}`,
           functionName: 'submit_evidence',
-          args: [contractGrantId, contractMilestoneId, url],
+          args: [contractGrantId, contractMilestoneId, url, progressReport],
           value: 0n
         });
         // eslint-disable-next-line @typescript-eslint/ban-ts-comment

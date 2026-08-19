@@ -1,4 +1,4 @@
-# v0.3.0
+# v0.4.0
 # { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
 from genlayer import *
 import json
@@ -9,8 +9,10 @@ from dataclasses import dataclass
 class Milestone:
     id: str
     amount: bigint
+    criteria: str          # Stored milestone criteria / requirements
     evidence_url: str
-    status: str  # PENDING, SUBMITTED, APPROVED, PARTIAL, CUT, ESCALATED, RETRY
+    progress_report: str   # Stored submitted progress report text
+    status: str            # PENDING, SUBMITTED, APPROVED, PARTIAL, CUT, ESCALATED, RETRY
     attempts: bigint
     reason: str
 
@@ -32,15 +34,12 @@ class Contract(gl.Contract):
     next_grant_id: bigint
 
     def __init__(self):
-        # Do NOT reassign TreeMap or DynArray in __init__
         self.next_grant_id = bigint(1)
 
     def _milestone_key(self, grant_id: str, milestone_id: str) -> str:
         return f"{grant_id}_{milestone_id}"
 
     def _is_terminal_status(self, status: str) -> bool:
-        # ESCALATED is NOT terminal: the grantee can resubmit evidence,
-        # and funds should stay locked for DAO arbitration.
         return status in ["APPROVED", "PARTIAL", "CUT"]
 
     def _maybe_close_grant(self, grant_id: str, grant: Grant) -> None:
@@ -55,11 +54,10 @@ class Contract(gl.Contract):
         self.grants[grant_id] = grant
 
     @gl.public.write.payable
-    def create_grant(self, grantee: str, title: str, proposal_url: str, milestone_amounts_str: str) -> str:
+    def create_grant(self, grantee: str, title: str, proposal_url: str, milestone_amounts_str: str, milestone_criteria_json: str = "") -> str:
         funder = str(gl.message.sender_address).lower()
         grantee = str(grantee).lower()
         
-        # Validate proposal_url is a proper URL (not mixed with title)
         url_str = str(proposal_url).strip()
         if not url_str.startswith("http://") and not url_str.startswith("https://"):
             raise UserError("proposal_url must be a valid HTTP/HTTPS URL.")
@@ -68,7 +66,6 @@ class Contract(gl.Contract):
         if not title_str:
             title_str = "Untitled Grant"
         
-        # Parse milestone amounts (supports comma-separated "100,200" or JSON array "[100, 200]")
         try:
             if milestone_amounts_str.strip().startswith("["):
                 raw_amounts = json.loads(milestone_amounts_str)
@@ -88,21 +85,35 @@ class Contract(gl.Contract):
             
         total_amount = bigint(total_calc)
         
-        # Require exact escrow amount for all milestones
         if gl.message.value < total_amount:
             raise UserError(f"Insufficient funds sent. Expected {str(total_amount)}, got {str(gl.message.value)}.")
         if gl.message.value > total_amount:
             raise UserError(f"Exact milestone escrow required. Expected {str(total_amount)}, got {str(gl.message.value)}.")
+
+        # Parse criteria list if provided
+        criteria_list = []
+        if milestone_criteria_json and str(milestone_criteria_json).strip():
+            try:
+                c_str = str(milestone_criteria_json).strip()
+                if c_str.startswith("["):
+                    criteria_list = json.loads(c_str)
+                else:
+                    criteria_list = [x.strip() for x in c_str.split("|") if x.strip()]
+            except Exception:
+                criteria_list = []
 
         grant_id = str(self.next_grant_id)
         self.next_grant_id += bigint(1)
 
         for i, val in enumerate(raw_amounts):
             ms_key = f"{grant_id}_{i}"
+            crit = str(criteria_list[i]) if i < len(criteria_list) else f"Milestone {i+1} Deliverables"
             self.milestones[ms_key] = Milestone(
                 id=str(i),
                 amount=bigint(val),
+                criteria=crit,
                 evidence_url="",
+                progress_report="",
                 status="PENDING",
                 attempts=bigint(0),
                 reason="Awaiting deliverable submission."
@@ -122,7 +133,7 @@ class Contract(gl.Contract):
         return grant_id
 
     @gl.public.write
-    def submit_evidence(self, grant_id: str, milestone_id: str, evidence_url: str) -> str:
+    def submit_evidence(self, grant_id: str, milestone_id: str, evidence_url: str, progress_report: str = "") -> str:
         if grant_id not in self.grants:
             raise UserError("Grant not found.")
         
@@ -149,6 +160,7 @@ class Contract(gl.Contract):
             raise UserError("Maximum 3 submission attempts reached for this milestone. Permanently locked.")
             
         ms.evidence_url = str(evidence_url).strip()
+        ms.progress_report = str(progress_report).strip() if progress_report else "Evidence submitted."
         ms.status = "SUBMITTED"
         ms.reason = f"Evidence submitted (Attempt {int(str(ms.attempts))}/3). Awaiting on-chain AI consensus adjudication."
         self.milestones[ms_key] = ms
@@ -171,20 +183,33 @@ class Contract(gl.Contract):
         if ms.status != "SUBMITTED":
             raise UserError(f"Milestone is not in SUBMITTED state. Current status: {ms.status}")
 
-        # Extract storage fields to local strings before entering nondeterministic lambda
         proposal_str = str(grant.proposal_url)
         evidence_str = str(ms.evidence_url)
-        # Track extraction errors for hard runtime enforcement (not just LLM prompt rules)
-        # Using a set to avoid duplicates when leader_fn is called multiple times by validators
+        stored_criteria = str(ms.criteria)
+        stored_report = str(ms.progress_report)
+        
         extraction_errors = set()
+
+        def is_unusable_render(text: str) -> bool:
+            if not text or not text.strip():
+                return True
+            low = text.lower()
+            error_keywords = [
+                "web_extraction_error", "404 not found", "403 forbidden", "500 internal server error",
+                "502 bad gateway", "503 service unavailable", "504 gateway timeout", "dns_probe_finished",
+                "unable to render", "connection refused", "network timeout", "access denied"
+            ]
+            for kw in error_keywords:
+                if kw in low:
+                    return True
+            return False
 
         def leader_fn():
             try:
                 if proposal_str:
                     prop_res = gl.nondet.web.render(proposal_str, mode="text")
                     prop_text = prop_res.content if hasattr(prop_res, "content") else str(prop_res)
-                    low_prop = prop_text.lower()
-                    if "web_extraction_error" in low_prop or "404 not found" in low_prop or "dns_probe_finished" in low_prop or "unable to render" in low_prop or "connection refused" in low_prop:
+                    if is_unusable_render(prop_text):
                         extraction_errors.add("proposal")
                 else:
                     prop_text = "No proposal URL provided."
@@ -196,8 +221,7 @@ class Contract(gl.Contract):
                 if evidence_str:
                     ev_res = gl.nondet.web.render(evidence_str, mode="text")
                     ev_text = ev_res.content if hasattr(ev_res, "content") else str(ev_res)
-                    low_ev = ev_text.lower()
-                    if "web_extraction_error" in low_ev or "404 not found" in low_ev or "dns_probe_finished" in low_ev or "unable to render" in low_ev or "connection refused" in low_ev:
+                    if is_unusable_render(ev_text):
                         extraction_errors.add("evidence")
                 else:
                     ev_text = "No evidence URL provided."
@@ -207,27 +231,33 @@ class Contract(gl.Contract):
 
             prompt = f"""
             You are an expert grant auditor and judge for a decentralized DAO on the GenLayer network.
-            Your task is to evaluate the submitted evidence for a milestone against the original grant proposal.
+            Your task is to evaluate the submitted evidence for a milestone against the stored criteria and proposal.
             
-            ORIGINAL PROPOSAL:
-            {prop_text[:2500]}
+            STORED MILESTONE CRITERIA (REQUIREMENTS):
+            {stored_criteria}
             
-            SUBMITTED EVIDENCE:
-            {ev_text[:2500]}
+            SUBMITTED PROGRESS REPORT (TEXT):
+            {stored_report}
             
-            Evaluate whether the evidence proves the milestone was completed successfully according to the proposal.
+            ORIGINAL PROPOSAL (RENDERED):
+            {prop_text[:2000]}
+            
+            SUBMITTED EVIDENCE (RENDERED):
+            {ev_text[:2000]}
+            
+            Evaluate whether the submitted evidence and progress report prove the milestone criteria were fulfilled.
             
             Rules for verdict:
-            - RELEASE: The evidence clearly proves completion of the milestone requirements.
+            - RELEASE: The evidence clearly proves completion of the milestone criteria.
             - PARTIAL: The evidence proves partial completion or minor deliverables are missing.
             - CUT: The work submitted is definitively fraudulent, intentionally incorrect, or clearly contradicts the grant goals.
             - ESCALATE: The evidence is contradictory, ambiguous, or requires human arbitration.
             - RETRY: Minor formatting errors or incomplete deliverables that can be resubmitted.
             
-            CRITICAL ESCROW PROTECTION RULE (MANDATORY): If either the proposal or submitted evidence contains "WEB_EXTRACTION_ERROR", a 404 error page, network timeout, unparseable summary structure, or an unreachable placeholder domain during extraction, you MUST NEVER return "CUT" (because CUT would improperly refund the Funder when work may be valid or temporary network failures occur). Instead, you MUST output verdict "ESCALATE" with confidence 100 and reason "Data extraction or network error during consensus rendering; escrowed funds are preserved and frozen in contract for safety and arbitration without improper customer refund."
+            CRITICAL ESCROW PROTECTION RULE (MANDATORY): If either proposal or evidence render is unusable, failed, 404, 500, empty, or network-errored, you MUST NEVER output "CUT". Instead, output verdict "ESCALATE" with confidence 100 and reason "Source render unusable; escrow preserved in contract for human DAO arbitration."
             
             You MUST respond with ONLY a JSON object in this exact format:
-            {{"verdict": "RELEASE|PARTIAL|CUT|ESCALATE|RETRY", "confidence": 100, "reason": "detailed explanation of your decision"}}
+            {{"verdict": "RELEASE|PARTIAL|CUT|ESCALATE|RETRY", "confidence": 100, "reason": "detailed explanation"}}
             """
             
             res = gl.nondet.exec_prompt(prompt, response_format="json")
@@ -239,7 +269,7 @@ class Contract(gl.Contract):
                 text = res.content if hasattr(res, "content") else str(res)
                 return self._parse_llm_json(text)
             except Exception:
-                return {"verdict": "ESCALATE", "confidence": 100, "reason": "Escalated due to AI execution or JSON parse error to preserve escrowed funds without improper customer refund."}
+                return {"verdict": "ESCALATE", "confidence": 100, "reason": "Escalated due to AI execution or JSON parse error to preserve escrowed funds."}
 
         def validator_fn(leader_res) -> bool:
             leader_data = leader_res
@@ -249,7 +279,7 @@ class Contract(gl.Contract):
                 try:
                     leader_data = self._parse_llm_json(str(leader_data))
                 except Exception:
-                    leader_data = {"verdict": "ESCALATE", "confidence": 100, "reason": "Invalid nondeterministic response; escrow preserved in contract."}
+                    leader_data = {"verdict": "ESCALATE", "confidence": 100, "reason": "Invalid response; escrow preserved."}
             mine_data = leader_fn()
             v_leader = str(leader_data.get("verdict", "")).upper().strip()
             v_mine = str(mine_data.get("verdict", "")).upper().strip()
@@ -269,12 +299,11 @@ class Contract(gl.Contract):
             confidence = 100
         reason = str(result.get("reason", "No reason provided."))
 
-        # HARD RUNTIME ENFORCEMENT: If any extraction error occurred, NEVER allow CUT.
-        # This is enforced at the contract logic level, independent of the LLM prompt.
-        if len(extraction_errors) > 0 and verdict == "CUT":
+        # HARD RUNTIME ENFORCEMENT: If any extraction error occurred, NEVER allow CUT or Payout
+        if len(extraction_errors) > 0 and verdict in ["CUT", "RELEASE", "PARTIAL"]:
             verdict = "ESCALATE"
-            error_list = sorted(list(extraction_errors))  # Sort for deterministic output
-            reason = f"[RUNTIME OVERRIDE: Extraction failed for {', '.join(error_list)}] Verdict CUT blocked. Escrow preserved for DAO arbitration. Original reason: {reason}"
+            error_list = sorted(list(extraction_errors))
+            reason = f"[RUNTIME OVERRIDE: Unusable source render for {', '.join(error_list)}] Verdict blocked. Escrow preserved for DAO arbitration. Original reason: {reason}"
 
         if confidence < 65:
             verdict = "ESCALATE"
@@ -301,12 +330,12 @@ class Contract(gl.Contract):
         elif verdict == "RETRY":
             payout_amount = bigint(0)
             ms.status = "RETRY"
-            ms.reason = f"🔄 [RETRY REQUESTED - Attempt {int(str(ms.attempts))}/3] {reason} | Milestone reset for resubmission after 1-minute cooldown."
+            ms.reason = f"🔄 [RETRY REQUESTED - Attempt {int(str(ms.attempts))}/3] {reason} | Milestone reset for resubmission."
         elif verdict == "CUT":
             if ms.attempts < bigint(3):
                 payout_amount = bigint(0)
                 ms.status = "RETRY"
-                ms.reason = f"🔄 [REJECTED - Attempt {int(str(ms.attempts))}/3] {reason} | Milestone reset for resubmission after 1-minute cooldown."
+                ms.reason = f"🔄 [REJECTED - Attempt {int(str(ms.attempts))}/3] {reason} | Milestone reset for resubmission."
             else:
                 payout_amount = bigint(0)
                 ms.status = "CUT"
@@ -316,19 +345,66 @@ class Contract(gl.Contract):
             verdict = "ESCALATE"
             ms.status = "ESCALATED"
             ms.reason = f"🚨 [ESCALATED TO DAO - ESCROW PRESERVED] {reason}"
-            # Escalate leaves funds locked in contract for resolution without improper customer refund for resolution
 
         self.milestones[ms_key] = ms
         self._maybe_close_grant(grant_id, grant)
 
         return json.dumps({"verdict": verdict, "reason": reason, "confidence": confidence, "payout": str(payout_amount)})
 
+    @gl.public.write
+    def resolve_escalated_milestone(self, grant_id: str, milestone_id: str, verdict: str, reason: str) -> str:
+        """On-Chain DAO Arbitration Path requested by Steward to resolve escalated milestones."""
+        if grant_id not in self.grants:
+            raise UserError("Grant not found.")
+            
+        grant = self.grants[grant_id]
+        sender = str(gl.message.sender_address).lower()
+        if sender != str(grant.funder).lower():
+            raise UserError("Only the grant funder / DAO arbiter can resolve escalated milestones.")
+            
+        ms_key = f"{grant_id}_{milestone_id}"
+        if ms_key not in self.milestones:
+            raise UserError("Milestone not found.")
+            
+        ms = self.milestones[ms_key]
+        if ms.status != "ESCALATED":
+            raise UserError(f"Milestone is not in ESCALATED state. Current status: {ms.status}")
+
+        target_verdict = str(verdict).upper().strip()
+        if target_verdict not in ["RELEASE", "PARTIAL", "CUT"]:
+            raise UserError("Arbitration verdict must be RELEASE, PARTIAL, or CUT.")
+
+        amount = ms.amount
+        arbitration_reason = str(reason).strip() if reason else "DAO Human Arbitration Decision"
+
+        if target_verdict == "RELEASE":
+            ms.status = "APPROVED"
+            ms.reason = f"✓ [DAO ARBITRATION RESOLVED: RELEASE (100%)] {arbitration_reason}"
+            gl.get_contract_at(Address(str(grant.grantee))).emit_transfer(value=amount)
+        elif target_verdict == "PARTIAL":
+            half = amount // bigint(2)
+            rem = amount - half
+            ms.status = "PARTIAL"
+            ms.reason = f"⚠️ [DAO ARBITRATION RESOLVED: PARTIAL (50%)] {arbitration_reason}"
+            if half > bigint(0):
+                gl.get_contract_at(Address(str(grant.grantee))).emit_transfer(value=half)
+            if rem > bigint(0):
+                gl.get_contract_at(Address(str(grant.funder))).emit_transfer(value=rem)
+        elif target_verdict == "CUT":
+            ms.status = "CUT"
+            ms.reason = f"🚫 [DAO ARBITRATION RESOLVED: CUT (REFUND)] {arbitration_reason}"
+            gl.get_contract_at(Address(str(grant.funder))).emit_transfer(value=amount)
+
+        self.milestones[ms_key] = ms
+        self._maybe_close_grant(grant_id, grant)
+
+        return json.dumps({"verdict": target_verdict, "status": ms.status, "reason": ms.reason})
+
     def _parse_llm_json(self, text) -> dict:
         if isinstance(text, dict):
             return text
         if hasattr(text, '__dict__'):
             return text.__dict__
-        # json is already imported at module level
         text = str(text).strip()
         if text.startswith("```json"):
             text = text[7:]
@@ -353,7 +429,9 @@ class Contract(gl.Contract):
                 ms_list.append({
                     "id": m.id,
                     "amount": str(m.amount),
+                    "criteria": getattr(m, "criteria", "Milestone Criteria"),
                     "evidence_url": m.evidence_url,
+                    "progress_report": getattr(m, "progress_report", ""),
                     "status": m.status,
                     "attempts": str(m.attempts),
                     "reason": m.reason
@@ -389,7 +467,9 @@ class Contract(gl.Contract):
                         ms_list.append({
                             "id": m.id,
                             "amount": str(m.amount),
+                            "criteria": getattr(m, "criteria", "Milestone Criteria"),
                             "evidence_url": m.evidence_url,
+                            "progress_report": getattr(m, "progress_report", ""),
                             "status": m.status,
                             "attempts": str(m.attempts),
                             "reason": m.reason
