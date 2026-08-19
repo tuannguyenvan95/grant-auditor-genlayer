@@ -46,7 +46,7 @@ declare global {
 }
 
 // GenLayer Contract Address for GrantAuditor (Synchronized with latest on-chain deployment)
-const CONTRACT_ADDRESS = '0x8CE13fE1d27076587D983110e6dbCD73d9CF7f24';
+const CONTRACT_ADDRESS = '0xF7f7d2d8C3906da7df8eC7dEb387e360230060A7';
 const EXPLORER_BASE_URL = "https://explorer-studio.genlayer.com";
 
 type VerdictStatus = 'PENDING' | 'SUBMITTED' | 'APPROVED' | 'PARTIAL' | 'CUT' | 'ESCALATED' | 'RETRY';
