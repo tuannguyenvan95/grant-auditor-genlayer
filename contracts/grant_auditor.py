@@ -316,7 +316,7 @@ class Contract(gl.Contract):
             payout_amount = amount
             ms.status = "APPROVED"
             ms.reason = f"✓ [RELEASE (100%)] AI Consensus approved (Attempt {int(str(ms.attempts))}/3): {reason}"
-            gl.get_contract_at(Address(str(grant.grantee))).emit_transfer(value=amount)
+            gl.get_contract_at(Address(str(grant.grantee))).emit_transfer(value=u256(amount))
         elif verdict == "PARTIAL":
             half = amount // bigint(2)
             rem = amount - half
@@ -324,9 +324,9 @@ class Contract(gl.Contract):
             ms.status = "PARTIAL"
             ms.reason = f"⚠️ [PARTIAL (50%)] Partial fulfillment verified (Attempt {int(str(ms.attempts))}/3): {reason}"
             if half > bigint(0):
-                gl.get_contract_at(Address(str(grant.grantee))).emit_transfer(value=half)
+                gl.get_contract_at(Address(str(grant.grantee))).emit_transfer(value=u256(half))
             if rem > bigint(0):
-                gl.get_contract_at(Address(str(grant.funder))).emit_transfer(value=rem)
+                gl.get_contract_at(Address(str(grant.funder))).emit_transfer(value=u256(rem))
         elif verdict == "RETRY":
             payout_amount = bigint(0)
             ms.status = "RETRY"
@@ -340,7 +340,7 @@ class Contract(gl.Contract):
                 payout_amount = bigint(0)
                 ms.status = "CUT"
                 ms.reason = f"🚫 [PERMANENTLY CLOSED - 3/3 Attempts Failed] {reason} | 100% Escrow Refunded back to Funder."
-                gl.get_contract_at(Address(str(grant.funder))).emit_transfer(value=amount)
+                gl.get_contract_at(Address(str(grant.funder))).emit_transfer(value=u256(amount))
         else:
             verdict = "ESCALATE"
             ms.status = "ESCALATED"
@@ -380,20 +380,20 @@ class Contract(gl.Contract):
         if target_verdict == "RELEASE":
             ms.status = "APPROVED"
             ms.reason = f"✓ [DAO ARBITRATION RESOLVED: RELEASE (100%)] {arbitration_reason}"
-            gl.get_contract_at(Address(str(grant.grantee))).emit_transfer(value=amount)
+            gl.get_contract_at(Address(str(grant.grantee))).emit_transfer(value=u256(amount))
         elif target_verdict == "PARTIAL":
             half = amount // bigint(2)
             rem = amount - half
             ms.status = "PARTIAL"
             ms.reason = f"⚠️ [DAO ARBITRATION RESOLVED: PARTIAL (50%)] {arbitration_reason}"
             if half > bigint(0):
-                gl.get_contract_at(Address(str(grant.grantee))).emit_transfer(value=half)
+                gl.get_contract_at(Address(str(grant.grantee))).emit_transfer(value=u256(half))
             if rem > bigint(0):
-                gl.get_contract_at(Address(str(grant.funder))).emit_transfer(value=rem)
+                gl.get_contract_at(Address(str(grant.funder))).emit_transfer(value=u256(rem))
         elif target_verdict == "CUT":
             ms.status = "CUT"
             ms.reason = f"🚫 [DAO ARBITRATION RESOLVED: CUT (REFUND)] {arbitration_reason}"
-            gl.get_contract_at(Address(str(grant.funder))).emit_transfer(value=amount)
+            gl.get_contract_at(Address(str(grant.funder))).emit_transfer(value=u256(amount))
 
         self.milestones[ms_key] = ms
         self._maybe_close_grant(grant_id, grant)
