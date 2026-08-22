@@ -9,8 +9,8 @@ Grant programs often suffer from subjective milestone evaluations. GenLayer solv
 - **Confirmed URL**: [https://grant-auditor-genlayer-xi.vercel.app](https://grant-auditor-genlayer-xi.vercel.app)
 
 ## Deployed Contract
-- **Studionet Address**: `0x8247B366cFCC30d9734258bF90cB8da80A9D7A92`
-- **Explorer Link**: [GenLayer Explorer](https://genlayer-explorer.vercel.app/address/0x8247B366cFCC30d9734258bF90cB8da80A9D7A92)
+- **Studionet Address**: `0xCd0b3538559A45857aA16cBab665255D90853b4d`
+- **Explorer Link**: [GenLayer Explorer](https://genlayer-explorer.vercel.app/address/0xCd0b3538559A45857aA16cBab665255D90853b4d)
 
 ## 🛡️ Core GenLayer Compliance & Audit Standards
 GrantAuditor has been engineered from the ground up to comply with rigorous GenLayer audit and judging standards:
@@ -48,7 +48,7 @@ node tests/test_payment_regression.mjs
 1. Open `.env` in the `frontend/` directory.
 2. Add your deployed Contract Address:
    ```env
-   VITE_CONTRACT_ADDRESS=0x8247B366cFCC30d9734258bF90cB8da80A9D7A92
+   VITE_CONTRACT_ADDRESS=0xCd0b3538559A45857aA16cBab665255D90853b4d
    ```
 3. Run the development server or build for production:
    ```bash

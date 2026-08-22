@@ -4,7 +4,7 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { parseEther } from 'viem';
 
 // Constants
-const CONTRACT_ADDRESS = '0x8247B366cFCC30d9734258bF90cB8da80A9D7A92';
+const CONTRACT_ADDRESS = '0xCd0b3538559A45857aA16cBab665255D90853b4d';
 const DEFAULT_TEST_KEY = '0x5f5babe2057032ab30b8a353f13341478785069644a0c6d3126539104cd48168';
 
 // Environment variable support for security best practices (R22 compliance)
