@@ -32,7 +32,8 @@ import {
   Share2,
   MessageSquare,
   ShieldCheck,
-  RefreshCw
+  RefreshCw,
+  Scale
 } from 'lucide-react';
 import { createClient, createAccount } from 'genlayer-js';
 import { studionet } from 'genlayer-js/chains';
@@ -202,6 +203,11 @@ export function App() {
   const [adjudicatingKey, setAdjudicatingKey] = useState<string | null>(null);
   const [validatorProgress, setValidatorProgress] = useState<number>(0);
   const [activeStepText, setActiveStepText] = useState<string>("");
+
+  // DAO Arbitration Actions (resolve_escalated_milestone)
+  const [arbitrationVerdict, setArbitrationVerdict] = useState<Record<string, 'RELEASE' | 'PARTIAL' | 'CUT'>>({});
+  const [arbitrationReason, setArbitrationReason] = useState<Record<string, string>>({});
+  const [arbitratingKey, setArbitratingKey] = useState<string | null>(null);
 
   const addLog = (message: string, type: LogEntry['type'] = 'INFO', txHash?: string) => {
     const time = new Date().toTimeString().split(' ')[0] + '.' + new Date().getMilliseconds().toString().padStart(3, '0');
@@ -727,7 +733,7 @@ export function App() {
     try {
       const client = getGenLayerClient();
       try {
-        const progressReport = `Milestone deliverable submitted via GrantAuditor workstation for ${grantId}`;
+        const progressReport = (report && report.trim().length > 0) ? report.trim() : `Milestone deliverable submitted via GrantAuditor workstation for ${grantId}`;
         const txHash = await client.writeContract({
           address: CONTRACT_ADDRESS as `0x${string}`,
           functionName: 'submit_evidence',
@@ -948,6 +954,85 @@ export function App() {
       setAdjudicatingKey(null);
       setValidatorProgress(0);
       setActiveStepText("");
+    }
+  };
+
+  const handleResolveEscalatedMilestone = async (grant: Grant, milestone: Milestone) => {
+    if (!account) {
+      alert('Please connect your wallet first. Only the Funder/DAO Authority can execute on-chain arbitration.');
+      return;
+    }
+    const key = `${grant.grantId}-${milestone.id}`;
+    const verdict = arbitrationVerdict[key] || 'RELEASE';
+    const reason = (arbitrationReason[key] || '').trim() || 'DAO Human Governance Committee reviewed evidence and issued arbitration resolution.';
+    
+    // Resolve real on-chain IDs
+    const contractGrantId = grant.onChainId || grant.grantId;
+    const contractMilestoneId = String(milestone.id - 1);
+
+    setArbitratingKey(key);
+    addLog(`[DAO Arbitration] Broadcasting resolve_escalated_milestone(${contractGrantId}, Tranche #${milestone.id}, ${verdict}) to GenLayer Studionet...`, "TX");
+
+    try {
+      const client = getGenLayerClient();
+      const txHash = await client.writeContract({
+        address: CONTRACT_ADDRESS as `0x${string}`,
+        functionName: 'resolve_escalated_milestone',
+        args: [contractGrantId, contractMilestoneId, verdict, reason],
+        value: 0n
+      });
+
+      addLog(`Arbitration transaction broadcasted! TX: ${txHash}. Awaiting block confirmation...`, "INFO", txHash);
+
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
+      const receipt = await client.waitForTransactionReceipt({ hash: txHash });
+      const rcpt = receipt as any;
+      const hasError = rcpt?.status === 0 || rcpt?.status_name === 'REJECTED' || 
+                       rcpt?.data?.execution_result === 'ERROR' || 
+                       rcpt?.data?.leader_error != null;
+      if (hasError) {
+        let errorMsg = 'Arbitration transaction failed or rejected by GenLayer consensus.';
+        if (rcpt?.data?.leader_error) errorMsg = String(rcpt.data.leader_error);
+        throw new Error(errorMsg);
+      }
+
+      // Map verdict to final status
+      const finalStatus: VerdictStatus = verdict === 'RELEASE' ? 'APPROVED' : verdict === 'PARTIAL' ? 'PARTIAL' : 'CUT';
+      const payoutText = verdict === 'RELEASE' 
+        ? `Paid 100% (${milestone.amount} GEN) to Grantee via DAO Arbitration` 
+        : verdict === 'PARTIAL' 
+        ? `Split 50% (${milestone.amount / 2} GEN) to Grantee / 50% refunded to DAO via Arbitration` 
+        : `0 GEN paid; 100% (${milestone.amount} GEN) refunded to DAO Treasury via Arbitration`;
+
+      setGrants(prev => prev.map(g => {
+        if (g.grantId !== grant.grantId) return g;
+        const updatedMilestones = g.milestones.map(m => {
+          if (m.id !== milestone.id) return m;
+          return {
+            ...m,
+            status: finalStatus,
+            llmVerdict: `DAO Arbitrated: ${verdict}`,
+            llmReasoning: reason,
+            payoutExecuted: payoutText,
+            confidenceScore: 100
+          };
+        });
+        const allSettled = updatedMilestones.every(m => ['APPROVED', 'PARTIAL', 'CUT'].includes(m.status));
+        return {
+          ...g,
+          isSettled: allSettled,
+          milestones: updatedMilestones
+        };
+      }));
+
+      addLog(`🎉 [Arbitration Confirmed] Milestone #${milestone.id} resolved on-chain as ${verdict}! TX: ${txHash}`, "SUCCESS", txHash);
+    } catch (e: unknown) {
+      const errMsg = e instanceof Error ? e.message : String(e);
+      setRpcError(`DAO Arbitration Error:\n\n${errMsg}`);
+      addLog(`DAO Arbitration Error: ${errMsg}`, "ERROR");
+    } finally {
+      setArbitratingKey(null);
     }
   };
 
@@ -1918,6 +2003,85 @@ export function App() {
                                 <ExternalLink className="w-3.5 h-3.5" />
                               </a>
                             </div>
+
+                            {/* On-Chain DAO Arbitration Action Panel for ESCALATED Milestones */}
+                            {ms.status === 'ESCALATED' && (
+                              <div className="p-6 rounded-2xl bg-[#090b16] border border-indigo-500/70 space-y-5 shadow-2xl mt-4 font-mono">
+                                <div className="flex items-center justify-between border-b border-indigo-800/60 pb-3">
+                                  <span className="text-xs sm:text-sm font-black text-indigo-300 uppercase tracking-wide flex items-center">
+                                    <Scale className="w-5 h-5 mr-2 text-indigo-400" />
+                                    DAO Governance Arbitration Panel (resolve_escalated_milestone)
+                                  </span>
+                                  <span className="text-[10px] sm:text-xs px-2.5 py-1 rounded-lg bg-indigo-950 text-indigo-200 border border-indigo-700 font-bold">
+                                    Escrow Vault Protected
+                                  </span>
+                                </div>
+
+                                <p className="text-xs text-zinc-300 font-sans leading-relaxed">
+                                  This milestone deliverable was escalated to safeguard escrowed funds. As the Funder / DAO Authority, you can execute a real on-chain arbitration transaction to finalize token release or refund.
+                                </p>
+
+                                {/* Verdict Selection */}
+                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                  {[
+                                    { val: 'RELEASE', label: 'RELEASE 100%', sub: `Pay full ${ms.amount} GEN to Grantee`, color: 'emerald' },
+                                    { val: 'PARTIAL', label: 'PARTIAL 50/50', sub: `Split ${ms.amount / 2} GEN / ${ms.amount / 2} GEN`, color: 'amber' },
+                                    { val: 'CUT', label: 'CUT & REFUND', sub: `Refund full ${ms.amount} GEN to DAO Treasury`, color: 'rose' }
+                                  ].map((opt) => {
+                                    const isSelected = (arbitrationVerdict[`${activeGrant.grantId}-${ms.id}`] || 'RELEASE') === opt.val;
+                                    return (
+                                      <div
+                                        key={opt.val}
+                                        onClick={() => setArbitrationVerdict({ ...arbitrationVerdict, [`${activeGrant.grantId}-${ms.id}`]: opt.val as any })}
+                                        className={`p-3.5 rounded-xl border cursor-pointer transition-all text-left ${
+                                          isSelected
+                                            ? opt.val === 'RELEASE'
+                                              ? 'bg-emerald-950/80 border-emerald-400 text-emerald-300 ring-1 ring-emerald-400 shadow-lg shadow-emerald-950'
+                                              : opt.val === 'PARTIAL'
+                                              ? 'bg-amber-950/80 border-amber-400 text-amber-300 ring-1 ring-amber-400 shadow-lg shadow-amber-950'
+                                              : 'bg-rose-950/80 border-rose-400 text-rose-300 ring-1 ring-rose-400 shadow-lg shadow-rose-950'
+                                            : 'bg-zinc-900/60 border-zinc-800 text-zinc-400 hover:border-zinc-700'
+                                        }`}
+                                      >
+                                        <div className="font-black text-xs">{opt.label}</div>
+                                        <div className="text-[11px] opacity-80 mt-1 font-sans">{opt.sub}</div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+
+                                {/* Reason Input */}
+                                <div className="space-y-1.5">
+                                  <label className="block text-[11px] font-bold text-zinc-400 uppercase">DAO Arbitration Notes / Resolution Reason</label>
+                                  <input
+                                    type="text"
+                                    placeholder="e.g. DAO Governance reviewed GitHub deliverables manually and approved full release..."
+                                    value={arbitrationReason[`${activeGrant.grantId}-${ms.id}`] || ""}
+                                    onChange={(e) => setArbitrationReason({ ...arbitrationReason, [`${activeGrant.grantId}-${ms.id}`]: e.target.value })}
+                                    className="w-full bg-[#111422] border border-zinc-700 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-zinc-500 font-sans focus:outline-none focus:border-indigo-400 shadow-inner"
+                                  />
+                                </div>
+
+                                {/* Execute Button */}
+                                <button
+                                  disabled={arbitratingKey === `${activeGrant.grantId}-${ms.id}`}
+                                  onClick={() => handleResolveEscalatedMilestone(activeGrant, ms)}
+                                  className="w-full py-3.5 px-6 bg-gradient-to-r from-indigo-500 via-purple-600 to-cyan-400 text-white font-mono font-black text-xs sm:text-sm uppercase tracking-wider rounded-xl shadow-xl hover:opacity-95 transform hover:-translate-y-0.5 transition-all cursor-pointer flex items-center justify-center space-x-2 disabled:opacity-50"
+                                >
+                                  {arbitratingKey === `${activeGrant.grantId}-${ms.id}` ? (
+                                    <>
+                                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                                      <span>Executing On-Chain Arbitration Transaction...</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Scale className="w-4 h-4" />
+                                      <span>Broadcast DAO Arbitration (resolve_escalated_milestone)</span>
+                                    </>
+                                  )}
+                                </button>
+                              </div>
+                            )}
                           </div>
                         )}
                       </div>

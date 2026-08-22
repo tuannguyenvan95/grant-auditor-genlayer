@@ -225,24 +225,26 @@ async function main() {
     // ---------------------------------------------------------
     console.log("\n▶️ STEP 4: Testing On-Chain DAO Arbitration Path (resolve_escalated_milestone)...");
     
-    if (msAdjudicated.status === 'ESCALATED') {
-      const arbitrationReason = "DAO Governance Committee verified Github PR manually and approved 100% release.";
-      const tx4 = await client.writeContract({
-        address: CONTRACT_ADDRESS,
-        functionName: 'resolve_escalated_milestone',
-        args: [grantId, "0", "RELEASE", arbitrationReason]
-      });
-      
-      console.log(`   Arbitration Transaction Hash: ${tx4}`);
-      const resolvedGrantState = await pollGrantMilestoneState(grantId, 0, (ms) => ms.status === 'APPROVED');
-      
-      if (resolvedGrantState.milestones[0].status === 'APPROVED') {
-        pass("ON-CHAIN ARBITRATION PATH: Escalated milestone resolved successfully via resolve_escalated_milestone.");
-      } else {
-        fail("ON-CHAIN ARBITRATION PATH: Failed to resolve escalated milestone.");
-      }
+    if (msAdjudicated.status !== 'ESCALATED') {
+      fail(`ON-CHAIN ARBITRATION PATH: Expected milestone status to be ESCALATED on unusable render, but got [${msAdjudicated.status}]. Test failed per Steward specification.`);
+    }
+
+    const arbitrationReason = "DAO Governance Committee verified Github PR manually and approved 100% release.";
+    console.log(`   Broadcasting resolve_escalated_milestone transaction...`);
+    const tx4 = await client.writeContract({
+      address: CONTRACT_ADDRESS,
+      functionName: 'resolve_escalated_milestone',
+      args: [grantId, "0", "RELEASE", arbitrationReason]
+    });
+    
+    console.log(`   Arbitration Transaction Hash: ${tx4}`);
+    console.log(`   Polling for on-chain arbitration confirmation...`);
+    const resolvedGrantState = await pollGrantMilestoneState(grantId, 0, (ms) => ms.status === 'APPROVED');
+    
+    if (resolvedGrantState.milestones[0].status === 'APPROVED') {
+      pass("ON-CHAIN ARBITRATION PATH: Escalated milestone actively exercised and confirmed via resolve_escalated_milestone.");
     } else {
-      pass("ON-CHAIN ARBITRATION PATH: Arbitration method ready and validated on contract.");
+      fail(`ON-CHAIN ARBITRATION PATH: Expected status APPROVED after arbitration, but got [${resolvedGrantState.milestones[0].status}].`);
     }
 
   } catch(e) {
