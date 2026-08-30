@@ -41,7 +41,13 @@ class MockGL:
             @staticmethod
             def render(url, mode="text"): pass
         @staticmethod
-        def exec_prompt(prompt, response_format="json"): pass
+        def exec_prompt(prompt, response_format="json"):
+            import re
+            canary = ""
+            match = re.search(r'"canary":\s*"([^"]+)"', str(prompt))
+            if match:
+                canary = match.group(1)
+            return {"verdict": "ESCALATE", "confidence": 100, "canary": canary, "reason": "Mocked response"}
 
     class vm:
         Return = MockReturn
