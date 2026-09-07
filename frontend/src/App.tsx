@@ -33,10 +33,12 @@ import {
   MessageSquare,
   ShieldCheck,
   RefreshCw,
-  Scale
+  Scale,
+  ShieldAlert
 } from 'lucide-react';
 import { createClient, createAccount } from 'genlayer-js';
 import { studionet } from 'genlayer-js/chains';
+import { parseEther } from 'viem';
 import './index.css';
 
 // Ensure proper TypeScript typing for injected Web3 Ethereum providers
@@ -50,7 +52,21 @@ declare global {
 const CONTRACT_ADDRESS = '0x9Eb43D02a286278338D831c207A46E549A5bA2E3';
 const EXPLORER_BASE_URL = "https://explorer-studio.genlayer.com";
 
-type VerdictStatus = 'PENDING' | 'SUBMITTED' | 'APPROVED' | 'PARTIAL' | 'CUT' | 'ESCALATED' | 'RETRY';
+type VerdictStatus = 'PENDING' | 'SUBMITTED' | 'APPROVED' | 'PARTIAL' | 'CUT' | 'ESCALATED' | 'RETRY' | 'APPEALED';
+
+interface AppealData {
+  appellant: string;
+  stakeAmount: string;
+  justification: string;
+  supplementalUrl?: string;
+  status: 'PENDING' | 'UPHELD' | 'OVERTURNED';
+  reason: string;
+}
+
+interface Reputation {
+  score: number;
+  tier: string;
+}
 
 interface Milestone {
   id: number;
@@ -66,6 +82,7 @@ interface Milestone {
   payoutExecuted?: string;
   attempts?: number;
   cooldownExpiresAt?: number;
+  appeal?: AppealData;
 }
 
 interface Grant {
@@ -79,6 +96,8 @@ interface Grant {
   totalAmount: number;
   isSettled: boolean;
   createdAt: string;
+  funderReputation?: Reputation;
+  granteeReputation?: Reputation;
   milestones: Milestone[];
 }
 
@@ -208,6 +227,14 @@ export function App() {
   const [arbitrationVerdict, setArbitrationVerdict] = useState<Record<string, 'RELEASE' | 'PARTIAL' | 'CUT'>>({});
   const [arbitrationReason, setArbitrationReason] = useState<Record<string, string>>({});
   const [arbitratingKey, setArbitratingKey] = useState<string | null>(null);
+
+  // Stake-based Appeal Protocol State (file_appeal & adjudicate_appeal)
+  const [appealJustification, setAppealJustification] = useState<Record<string, string>>({});
+  const [appealSupplementalUrl, setAppealSupplementalUrl] = useState<Record<string, string>>({});
+  const [appealBondAmount, setAppealBondAmount] = useState<Record<string, string>>({});
+  const [filingAppealKey, setFilingAppealKey] = useState<string | null>(null);
+  const [adjudicatingAppealKey, setAdjudicatingAppealKey] = useState<string | null>(null);
+  const [activeAppealModalKey, setActiveAppealModalKey] = useState<string | null>(null);
 
   const addLog = (message: string, type: LogEntry['type'] = 'INFO', txHash?: string) => {
     const time = new Date().toTimeString().split(' ')[0] + '.' + new Date().getMilliseconds().toString().padStart(3, '0');
@@ -1036,6 +1063,170 @@ export function App() {
     }
   };
 
+  // Stake-based Appeal Protocol: File an appeal with GEN bond
+  const handleFileAppeal = async (grant: Grant, milestone: Milestone) => {
+    const key = `${grant.grantId}-${milestone.id}`;
+    const justification = (appealJustification[key] || "").trim();
+    const suppUrl = (appealSupplementalUrl[key] || "").trim();
+    const bondStr = (appealBondAmount[key] || "0.05").trim();
+
+    if (!justification) {
+      setRpcError("Appeal Justification is required to submit a valid appeal.");
+      return;
+    }
+
+    const contractGrantId = grant.onChainId || grant.grantId;
+    const contractMilestoneId = String(milestone.id - 1);
+
+    setFilingAppealKey(key);
+    addLog(`[Stake-based Appeal] Filing appeal for Grant ${contractGrantId}, Tranche #${milestone.id} with ${bondStr} GEN bond...`, "TX");
+
+    try {
+      const client = getGenLayerClient();
+      const bondWei = parseEther(bondStr);
+      const txHash = await client.writeContract({
+        address: CONTRACT_ADDRESS as `0x${string}`,
+        functionName: 'file_appeal',
+        args: [contractGrantId, contractMilestoneId, justification, suppUrl],
+        value: bondWei
+      });
+
+      addLog(`Appeal transaction broadcasted! TX: ${txHash}. Awaiting block confirmation...`, "INFO", txHash);
+
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
+      const receipt = await client.waitForTransactionReceipt({ hash: txHash });
+      const rcpt = receipt as any;
+      const hasError = rcpt?.status === 0 || rcpt?.status_name === 'REJECTED' || 
+                       rcpt?.data?.execution_result === 'ERROR' || 
+                       rcpt?.data?.leader_error != null;
+      if (hasError) {
+        let errorMsg = 'Appeal filing failed or rejected by GenLayer consensus.';
+        if (rcpt?.data?.leader_error) errorMsg = String(rcpt.data.leader_error);
+        throw new Error(errorMsg);
+      }
+
+      setGrants(prev => prev.map(g => {
+        if (g.grantId !== grant.grantId) return g;
+        const updatedMilestones = g.milestones.map(m => {
+          if (m.id !== milestone.id) return m;
+          return {
+            ...m,
+            status: 'APPEALED' as VerdictStatus,
+            appeal: {
+              appellant: account || 'Current Account',
+              stakeAmount: bondStr,
+              justification,
+              supplementalUrl: suppUrl,
+              status: 'PENDING' as const,
+              reason: 'Appeal bond locked. Awaiting Senior AI Appellate Jury adjudication.'
+            }
+          };
+        });
+        return { ...g, milestones: updatedMilestones };
+      }));
+
+      setActiveAppealModalKey(null);
+      addLog(`⚖️ [Appeal Active] Staked ${bondStr} GEN bond locked on-chain for Milestone #${milestone.id}! TX: ${txHash}`, "SUCCESS", txHash);
+    } catch (e: unknown) {
+      const errMsg = e instanceof Error ? e.message : String(e);
+      setRpcError(`Appeal Filing Error:\n\n${errMsg}`);
+      addLog(`Appeal Filing Error: ${errMsg}`, "ERROR");
+    } finally {
+      setFilingAppealKey(null);
+    }
+  };
+
+  // Stake-based Appeal Protocol: Adjudicate appeal via Senior AI Appellate Jury
+  const handleAdjudicateAppeal = async (grant: Grant, milestone: Milestone) => {
+    const key = `${grant.grantId}-${milestone.id}`;
+    const contractGrantId = grant.onChainId || grant.grantId;
+    const contractMilestoneId = String(milestone.id - 1);
+
+    setAdjudicatingAppealKey(key);
+    addLog(`[Senior AI Appellate Jury] Convening appellate consensus for Grant ${contractGrantId}, Tranche #${milestone.id}...`, "TX");
+
+    try {
+      const client = getGenLayerClient();
+      const txHash = await client.writeContract({
+        address: CONTRACT_ADDRESS as `0x${string}`,
+        functionName: 'adjudicate_appeal',
+        args: [contractGrantId, contractMilestoneId],
+        value: 0n
+      });
+
+      addLog(`Appellate adjudication broadcasted! TX: ${txHash}. Awaiting multi-validator LLM consensus...`, "INFO", txHash);
+
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
+      const receipt = await client.waitForTransactionReceipt({ hash: txHash });
+      const rcpt = receipt as any;
+      const hasError = rcpt?.status === 0 || rcpt?.status_name === 'REJECTED' || 
+                       rcpt?.data?.execution_result === 'ERROR' || 
+                       rcpt?.data?.leader_error != null;
+      if (hasError) {
+        let errorMsg = 'Appellate adjudication failed in GenVM consensus.';
+        if (rcpt?.data?.leader_error) errorMsg = String(rcpt.data.leader_error);
+        throw new Error(errorMsg);
+      }
+
+      let appVerdict = 'OVERTURN';
+      let appReason = 'Appellate decision confirmed on-chain.';
+      if (rcpt?.result) {
+        try {
+          const parsed = typeof rcpt.result === 'string' ? JSON.parse(rcpt.result) : rcpt.result;
+          if (parsed.verdict) appVerdict = parsed.verdict;
+          if (parsed.reason) appReason = parsed.reason;
+        } catch {
+          // ignore
+        }
+      }
+
+      const finalStatus: VerdictStatus = appVerdict === 'OVERTURN' ? 'APPROVED' : 'CUT';
+      const payoutText = appVerdict === 'OVERTURN'
+        ? `Appeal WON: 100% Stake bond refunded + ${milestone.amount} GEN milestone paid to Grantee`
+        : `Appeal REJECTED: Stake bond slashed to counterparty + 0 GEN paid`;
+
+      setGrants(prev => prev.map(g => {
+        if (g.grantId !== grant.grantId) return g;
+        const updatedMilestones = g.milestones.map(m => {
+          if (m.id !== milestone.id) return m;
+          return {
+            ...m,
+            status: finalStatus,
+            llmVerdict: `Appellate Verdict: ${appVerdict}`,
+            llmReasoning: appReason,
+            payoutExecuted: payoutText,
+            confidenceScore: 100,
+            appeal: m.appeal ? {
+              ...m.appeal,
+              status: appVerdict === 'OVERTURN' ? 'OVERTURNED' as const : 'UPHELD' as const,
+              reason: appReason
+            } : undefined
+          };
+        });
+        const allSettled = updatedMilestones.every(m => ['APPROVED', 'PARTIAL', 'CUT'].includes(m.status));
+        return {
+          ...g,
+          isSettled: allSettled,
+          milestones: updatedMilestones,
+          granteeReputation: g.granteeReputation ? {
+            ...g.granteeReputation,
+            score: appVerdict === 'OVERTURN' ? g.granteeReputation.score + 15 : Math.max(0, g.granteeReputation.score - 10)
+          } : undefined
+        };
+      }));
+
+      addLog(`🏛️ [Appellate Verdict Rendered: ${appVerdict}] Milestone #${milestone.id} resolved by Senior AI Jury! TX: ${txHash}`, "SUCCESS", txHash);
+    } catch (e: unknown) {
+      const errMsg = e instanceof Error ? e.message : String(e);
+      setRpcError(`Appellate Adjudication Error:\n\n${errMsg}`);
+      addLog(`Appellate Adjudication Error: ${errMsg}`, "ERROR");
+    } finally {
+      setAdjudicatingAppealKey(null);
+    }
+  };
+
   // Bot Chat Logic
   const handleSendBotMessage = (textToSend?: string) => {
     const query = (textToSend || chatInput).trim();
@@ -1547,11 +1738,21 @@ export function App() {
               {/* Funder / Grantee & Proposal Source Specs - 4-Column Responsive Layout */}
               <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 pt-6 text-xs font-mono">
                 <div className="p-4 rounded-xl bg-[#0c101a] border border-zinc-800/90 space-y-1.5 shadow-md flex flex-col justify-between">
-                  <span className="text-zinc-500 text-[11px] font-bold block uppercase tracking-wider">FUNDER DAO SPONSOR</span>
+                  <div className="flex items-center justify-between">
+                    <span className="text-zinc-500 text-[11px] font-bold block uppercase tracking-wider">FUNDER DAO SPONSOR</span>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-950/80 text-amber-300 border border-amber-600 font-bold">
+                      {activeGrant.funderReputation?.tier || "Gold Established"} ({activeGrant.funderReputation?.score ?? 55} pts)
+                    </span>
+                  </div>
                   <span className="text-zinc-200 font-bold text-sm block truncate">{activeGrant.funder}</span>
                 </div>
                 <div className="p-4 rounded-xl bg-[#0c101a] border border-zinc-800/90 space-y-1.5 shadow-md flex flex-col justify-between">
-                  <span className="text-zinc-500 text-[11px] font-bold block uppercase tracking-wider">GRANTEE RECIPIENT</span>
+                  <div className="flex items-center justify-between">
+                    <span className="text-zinc-500 text-[11px] font-bold block uppercase tracking-wider">GRANTEE RECIPIENT</span>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-950/80 text-cyan-300 border border-cyan-600 font-bold">
+                      {activeGrant.granteeReputation?.tier || "Silver Verified"} ({activeGrant.granteeReputation?.score ?? 40} pts)
+                    </span>
+                  </div>
                   <span className="text-zinc-200 font-bold text-sm block truncate">{activeGrant.grantee}</span>
                 </div>
                 <div className="p-4 rounded-xl bg-[#0c101a] border border-cyan-500/40 space-y-1.5 shadow-md flex flex-col justify-between hover:border-cyan-500/80 transition-colors">
@@ -2080,6 +2281,146 @@ export function App() {
                                     </>
                                   )}
                                 </button>
+                              </div>
+                            )}
+
+                            {/* On-Chain Stake-based Appeal Adjudication Panel for APPEALED Milestones */}
+                            {ms.status === 'APPEALED' && (
+                              <div className="p-6 rounded-2xl bg-gradient-to-br from-[#120b22] to-[#0a1428] border border-purple-500/80 space-y-5 shadow-2xl mt-4 font-mono">
+                                <div className="flex items-center justify-between border-b border-purple-800/60 pb-3">
+                                  <span className="text-xs sm:text-sm font-black text-purple-300 uppercase tracking-wide flex items-center">
+                                    <Scale className="w-5 h-5 mr-2 text-purple-400" />
+                                    Senior AI Appellate Court (adjudicate_appeal)
+                                  </span>
+                                  <span className="text-[10px] sm:text-xs px-2.5 py-1 rounded-lg bg-purple-950 text-purple-200 border border-purple-600 font-bold animate-pulse">
+                                    Staked Bond Active
+                                  </span>
+                                </div>
+
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                                  <div className="p-3 bg-[#080512] rounded-xl border border-purple-900/60">
+                                    <span className="text-zinc-500 text-[10px] block uppercase">Appellant</span>
+                                    <span className="text-white font-bold truncate block">{ms.appeal?.appellant || "Grantee/Funder"}</span>
+                                  </div>
+                                  <div className="p-3 bg-[#080512] rounded-xl border border-purple-900/60">
+                                    <span className="text-zinc-500 text-[10px] block uppercase">Staked Escrow Bond</span>
+                                    <span className="text-amber-400 font-black">{ms.appeal?.stakeAmount || "0.05"} GEN (Refunded if Won / Slashed if Lost)</span>
+                                  </div>
+                                </div>
+
+                                <div className="space-y-1">
+                                  <span className="text-zinc-400 text-[11px] font-bold block uppercase">Appellant Justification</span>
+                                  <p className="text-zinc-200 text-xs bg-[#080512] p-3 rounded-xl border border-purple-900/40 font-sans italic">
+                                    "{ms.appeal?.justification || "Challenging verdict with supplemental proofs."}"
+                                  </p>
+                                </div>
+
+                                {ms.appeal?.supplementalUrl && (
+                                  <div className="text-xs">
+                                    <span className="text-zinc-400 text-[11px] font-bold block uppercase">Supplemental Evidence</span>
+                                    <a href={ms.appeal.supplementalUrl} target="_blank" rel="noreferrer" className="text-cyan-400 hover:underline flex items-center mt-1">
+                                      <span className="truncate">{ms.appeal.supplementalUrl}</span>
+                                      <ExternalLink className="w-3.5 h-3.5 ml-1" />
+                                    </a>
+                                  </div>
+                                )}
+
+                                <button
+                                  disabled={adjudicatingAppealKey === `${activeGrant.grantId}-${ms.id}`}
+                                  onClick={() => handleAdjudicateAppeal(activeGrant, ms)}
+                                  className="w-full py-4 px-6 bg-gradient-to-r from-purple-600 via-indigo-600 to-cyan-400 text-white font-mono font-black text-xs sm:text-sm uppercase tracking-wider rounded-xl shadow-xl hover:opacity-95 transform hover:-translate-y-0.5 transition-all cursor-pointer flex items-center justify-center space-x-2 disabled:opacity-50"
+                                >
+                                  {adjudicatingAppealKey === `${activeGrant.grantId}-${ms.id}` ? (
+                                    <>
+                                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                                      <span>Convening Senior AI Appellate Jury...</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Zap className="w-4 h-4" />
+                                      <span>Convene Senior AI Appellate Jury (adjudicate_appeal)</span>
+                                    </>
+                                  )}
+                                </button>
+                              </div>
+                            )}
+
+                            {/* Option to File Appeal for ESCALATED, PARTIAL, or RETRY Milestones */}
+                            {['ESCALATED', 'PARTIAL', 'RETRY'].includes(ms.status) && (
+                              <div className="p-5 rounded-2xl bg-[#080d1a] border border-cyan-900/60 space-y-4 shadow-xl mt-4 font-mono">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-xs font-black text-cyan-300 uppercase tracking-wide flex items-center">
+                                    <ShieldAlert className="w-4 h-4 mr-2 text-cyan-400" />
+                                    Dispute Resolution: Stake-Based Appeal Protocol
+                                  </span>
+                                  <button
+                                    onClick={() => setActiveAppealModalKey(activeAppealModalKey === `${activeGrant.grantId}-${ms.id}` ? null : `${activeGrant.grantId}-${ms.id}`)}
+                                    className="text-[11px] px-3 py-1 rounded-lg bg-cyan-950 text-cyan-300 border border-cyan-700 font-bold hover:bg-cyan-900 transition-colors cursor-pointer"
+                                  >
+                                    {activeAppealModalKey === `${activeGrant.grantId}-${ms.id}` ? 'Cancel' : '⚖️ Break Deadlock (File Appeal)'}
+                                  </button>
+                                </div>
+
+                                {activeAppealModalKey === `${activeGrant.grantId}-${ms.id}` && (
+                                  <div className="space-y-3 pt-3 border-t border-zinc-800/80">
+                                    <p className="text-xs text-zinc-400 font-sans leading-relaxed">
+                                      If you dispute the evaluation or the funder is inactive, you can stake a GEN bond and submit supplemental proof. An independent Senior AI Appellate Jury will re-evaluate on-chain with Canary Guardrails.
+                                    </p>
+
+                                    <div>
+                                      <label className="block text-[11px] font-bold text-zinc-400 uppercase">Appeal Justification / Legal Argument</label>
+                                      <textarea
+                                        rows={2}
+                                        placeholder="Explain why the milestone deliverable was valid or how the original verdict was in error..."
+                                        value={appealJustification[`${activeGrant.grantId}-${ms.id}`] || ""}
+                                        onChange={(e) => setAppealJustification({ ...appealJustification, [`${activeGrant.grantId}-${ms.id}`]: e.target.value })}
+                                        className="w-full bg-[#0d1322] border border-zinc-700 rounded-xl p-2.5 text-xs text-white placeholder-zinc-500 font-sans focus:outline-none focus:border-cyan-400 shadow-inner mt-1"
+                                      />
+                                    </div>
+
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                      <div>
+                                        <label className="block text-[11px] font-bold text-zinc-400 uppercase">Supplemental Proof URL (Optional)</label>
+                                        <input
+                                          type="text"
+                                          placeholder="https://backup-proof.org/repo"
+                                          value={appealSupplementalUrl[`${activeGrant.grantId}-${ms.id}`] || ""}
+                                          onChange={(e) => setAppealSupplementalUrl({ ...appealSupplementalUrl, [`${activeGrant.grantId}-${ms.id}`]: e.target.value })}
+                                          className="w-full bg-[#0d1322] border border-zinc-700 rounded-xl px-3 py-2 text-xs text-white placeholder-zinc-500 font-sans focus:outline-none focus:border-cyan-400 shadow-inner mt-1"
+                                        />
+                                      </div>
+                                      <div>
+                                        <label className="block text-[11px] font-bold text-zinc-400 uppercase">Staked Appeal Bond (GEN)</label>
+                                        <input
+                                          type="number"
+                                          step="0.01"
+                                          placeholder="0.05"
+                                          value={appealBondAmount[`${activeGrant.grantId}-${ms.id}`] || "0.05"}
+                                          onChange={(e) => setAppealBondAmount({ ...appealBondAmount, [`${activeGrant.grantId}-${ms.id}`]: e.target.value })}
+                                          className="w-full bg-[#0d1322] border border-zinc-700 rounded-xl px-3 py-2 text-xs text-white placeholder-zinc-500 font-sans focus:outline-none focus:border-cyan-400 shadow-inner mt-1"
+                                        />
+                                      </div>
+                                    </div>
+
+                                    <button
+                                      disabled={filingAppealKey === `${activeGrant.grantId}-${ms.id}`}
+                                      onClick={() => handleFileAppeal(activeGrant, ms)}
+                                      className="w-full py-3 px-4 bg-gradient-to-r from-cyan-500 to-blue-600 text-black font-black text-xs uppercase tracking-wider rounded-xl shadow-lg hover:opacity-95 transition-all cursor-pointer flex items-center justify-center space-x-2 disabled:opacity-50"
+                                    >
+                                      {filingAppealKey === `${activeGrant.grantId}-${ms.id}` ? (
+                                        <>
+                                          <div className="w-4 h-4 border-2 border-black border-t-transparent rounded-full animate-spin"></div>
+                                          <span>Staking Bond & Submitting Appeal...</span>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <Scale className="w-4 h-4" />
+                                          <span>Lock Bond & Broadcast Appeal (file_appeal)</span>
+                                        </>
+                                      )}
+                                    </button>
+                                  </div>
+                                )}
                               </div>
                             )}
                           </div>

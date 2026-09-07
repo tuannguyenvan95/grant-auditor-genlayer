@@ -92,6 +92,8 @@ class TestGrantAuditorArbitrationSuite(unittest.TestCase):
         self.contract = contract_module.Contract()
         self.contract.grants = {}
         self.contract.milestones = {}
+        self.contract.appeals = {}
+        self.contract.reputations = {}
 
         # Create Grant: 1000 GEN for 1 milestone
         self.gl.message.value = MockBigInt(1000)
