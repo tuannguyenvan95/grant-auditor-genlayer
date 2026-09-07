@@ -4,7 +4,7 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { parseEther } from 'viem';
 
 // Target Contract Address (Update once new contract is deployed)
-const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS || '0x9Eb43D02a286278338D831c207A46E549A5bA2E3';
+const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS || '0x1E10Ed7060c2AD81991894B4056a2F454bffC589';
 const DEFAULT_TEST_KEY = '0x5f5babe2057032ab30b8a353f13341478785069644a0c6d3126539104cd48168';
 
 const privateKey = process.env.TEST_PRIVATE_KEY || DEFAULT_TEST_KEY;
