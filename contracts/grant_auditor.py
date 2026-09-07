@@ -10,10 +10,12 @@ class Milestone:
     amount: bigint
     criteria: str          # Stored milestone criteria / requirements
     evidence_url: str
+    evidence_hash: str     # Artifact / Git commit SHA-256 hash pinning
     progress_report: str   # Stored submitted progress report text
-    status: str            # PENDING, SUBMITTED, APPROVED, PARTIAL, CUT, ESCALATED, RETRY, APPEALED
+    status: str            # PENDING, SUBMITTED, AWAITING_PAYOUT, APPROVED, PARTIAL, CUT, ESCALATED, RETRY, APPEALED
     attempts: bigint
     reason: str
+    payout_ready_at: bigint # Timestamp after which cooling-off window clears for final payout
 
 @allow_storage
 @dataclass
@@ -25,7 +27,7 @@ class Grant:
     proposal_url: str
     total_amount: bigint
     num_milestones: bigint
-    status: str  # ACTIVE, CLOSED
+    status: str            # ACTIVE, CLOSED
 
 @allow_storage
 @dataclass
@@ -36,7 +38,7 @@ class Appeal:
     stake_amount: bigint
     justification: str
     supplemental_url: str
-    status: str  # PENDING, UPHELD, OVERTURNED
+    status: str            # PENDING, UPHELD, OVERTURNED
     reason: str
 
 class Contract(gl.Contract):
@@ -48,6 +50,32 @@ class Contract(gl.Contract):
 
     def __init__(self):
         self.next_grant_id = bigint(1)
+
+    def _get_current_timestamp(self) -> bigint:
+        """Derive trusted execution timestamp from transaction context with safe fallback."""
+        if hasattr(gl, "message_raw") and isinstance(gl.message_raw, dict):
+            dt_raw = gl.message_raw.get("datetime")
+            if dt_raw:
+                try:
+                    from datetime import datetime
+                    dt = datetime.fromisoformat(str(dt_raw).replace("Z", "+00:00"))
+                    ts = int(dt.timestamp())
+                    if ts > 0:
+                        return bigint(ts)
+                except Exception:
+                    pass
+        if hasattr(gl, "message") and hasattr(gl.message, "timestamp"):
+            try:
+                ts = int(str(gl.message.timestamp))
+                if ts > 0:
+                    return bigint(ts)
+            except Exception:
+                pass
+        try:
+            import time
+            return bigint(int(time.time()))
+        except Exception:
+            return bigint(1757250000)
 
     def _milestone_key(self, grant_id: str, milestone_id: str) -> str:
         return f"{grant_id}_{milestone_id}"
@@ -122,7 +150,6 @@ class Contract(gl.Contract):
         if gl.message.value > total_amount:
             raise UserError(f"Exact milestone escrow required. Expected {str(total_amount)}, got {str(gl.message.value)}.")
 
-        # Parse criteria list if provided
         criteria_list = []
         if milestone_criteria_json and str(milestone_criteria_json).strip():
             try:
@@ -145,10 +172,12 @@ class Contract(gl.Contract):
                 amount=bigint(val),
                 criteria=crit,
                 evidence_url="",
+                evidence_hash="",
                 progress_report="",
                 status="PENDING",
                 attempts=bigint(0),
-                reason="Awaiting deliverable submission."
+                reason="Awaiting deliverable submission.",
+                payout_ready_at=bigint(0)
             )
 
         new_grant = Grant(
@@ -165,7 +194,7 @@ class Contract(gl.Contract):
         return grant_id
 
     @gl.public.write
-    def submit_evidence(self, grant_id: str, milestone_id: str, evidence_url: str, progress_report: str = "") -> str:
+    def submit_evidence(self, grant_id: str, milestone_id: str, evidence_url: str, progress_report: str = "", evidence_hash: str = "") -> str:
         if grant_id not in self.grants:
             raise UserError("Grant not found.")
         
@@ -192,6 +221,7 @@ class Contract(gl.Contract):
             raise UserError("Maximum 3 submission attempts reached for this milestone. Permanently locked.")
             
         ms.evidence_url = str(evidence_url).strip()
+        ms.evidence_hash = str(evidence_hash).strip() if evidence_hash else ""
         ms.progress_report = str(progress_report).strip() if progress_report else "Evidence submitted."
         ms.status = "SUBMITTED"
         ms.reason = f"Evidence submitted (Attempt {int(str(ms.attempts))}/3). Awaiting on-chain AI consensus adjudication."
@@ -217,6 +247,7 @@ class Contract(gl.Contract):
 
         proposal_str = str(grant.proposal_url)
         evidence_str = str(ms.evidence_url)
+        evidence_hash_str = str(ms.evidence_hash)
         stored_criteria = str(ms.criteria)
         stored_report = str(ms.progress_report)
         
@@ -263,6 +294,7 @@ class Contract(gl.Contract):
                 ev_text = f"WEB_EXTRACTION_ERROR: Unable to render evidence URL: {str(e)}"
                 err_list.append("evidence")
 
+            # Untruncated full text evaluation per Steward guidelines (no [:2000] truncation)
             prompt = f"""
             You are an expert grant auditor and judge for a decentralized DAO on the GenLayer network.
             Your task is to evaluate the submitted evidence for a milestone against the stored criteria and proposal.
@@ -272,12 +304,15 @@ class Contract(gl.Contract):
             
             SUBMITTED PROGRESS REPORT (TEXT):
             {stored_report}
+
+            PINNED ARTIFACT HASH / COMMIT:
+            {evidence_hash_str if evidence_hash_str else "N/A"}
             
-            ORIGINAL PROPOSAL (RENDERED):
-            {prop_text[:2000]}
+            ORIGINAL PROPOSAL (FULL RENDERED CONTENT):
+            {prop_text}
             
-            SUBMITTED EVIDENCE (RENDERED):
-            {ev_text[:2000]}
+            SUBMITTED EVIDENCE (FULL RENDERED CONTENT):
+            {ev_text}
             
             Evaluate whether the submitted evidence and progress report prove the milestone criteria were fulfilled.
             
@@ -368,26 +403,20 @@ class Contract(gl.Contract):
 
         amount = ms.amount
         payout_amount = bigint(0)
+        now = self._get_current_timestamp()
 
+        # ⏳ 24H DISPUTE COOLING-OFF WINDOW ENFORCEMENT (Steward Standard)
         if verdict == "RELEASE":
             payout_amount = amount
-            ms.status = "APPROVED"
-            ms.reason = f"✓ [RELEASE (100%)] AI Consensus approved (Attempt {int(str(ms.attempts))}/3): {reason}"
-            gl.get_contract_at(Address(str(grant.grantee))).emit_transfer(value=u256(amount))
-            self._update_reputation(str(grant.grantee), 10)
-            self._update_reputation(str(grant.funder), 5)
+            ms.status = "AWAITING_PAYOUT"
+            ms.payout_ready_at = now + bigint(86400)
+            ms.reason = f"⏳ [AWAITING PAYOUT - 24H DISPUTE WINDOW] AI Consensus approved 100% (Attempt {int(str(ms.attempts))}/3): {reason}"
         elif verdict == "PARTIAL":
             half = amount // bigint(2)
-            rem = amount - half
             payout_amount = half
-            ms.status = "PARTIAL"
-            ms.reason = f"⚠️ [PARTIAL (50%)] Partial fulfillment verified (Attempt {int(str(ms.attempts))}/3): {reason}"
-            if half > bigint(0):
-                gl.get_contract_at(Address(str(grant.grantee))).emit_transfer(value=u256(half))
-            if rem > bigint(0):
-                gl.get_contract_at(Address(str(grant.funder))).emit_transfer(value=u256(rem))
-            self._update_reputation(str(grant.grantee), 5)
-            self._update_reputation(str(grant.funder), 5)
+            ms.status = "AWAITING_PAYOUT"
+            ms.payout_ready_at = now + bigint(86400)
+            ms.reason = f"⏳ [AWAITING PAYOUT - 24H DISPUTE WINDOW] Partial fulfillment verified 50/50 (Attempt {int(str(ms.attempts))}/3): {reason}"
         elif verdict == "RETRY":
             payout_amount = bigint(0)
             ms.status = "RETRY"
@@ -411,7 +440,83 @@ class Contract(gl.Contract):
         self.milestones[ms_key] = ms
         self._maybe_close_grant(grant_id, grant)
 
-        return json.dumps({"verdict": verdict, "reason": reason, "confidence": confidence, "payout": str(payout_amount)})
+        return json.dumps({"verdict": verdict, "reason": reason, "confidence": confidence, "payout": str(payout_amount), "status": ms.status, "payout_ready_at": str(ms.payout_ready_at)})
+
+    @gl.public.write
+    def finalize_milestone_payout(self, grant_id: str, milestone_id: str) -> str:
+        """Disburses funds strictly after the 24-hour cooling-off dispute window has elapsed."""
+        if grant_id not in self.grants:
+            raise UserError("Grant not found.")
+        grant = self.grants[grant_id]
+        if grant.status == "CLOSED":
+            raise UserError("Grant is closed.")
+
+        ms_key = self._milestone_key(grant_id, milestone_id)
+        if ms_key not in self.milestones:
+            raise UserError("Milestone not found.")
+        ms = self.milestones[ms_key]
+
+        if ms.status != "AWAITING_PAYOUT":
+            raise UserError(f"Milestone is in status '{ms.status}', not awaiting payout.")
+
+        now = self._get_current_timestamp()
+        if now < ms.payout_ready_at:
+            rem = int(str(ms.payout_ready_at - now))
+            raise UserError(f"24-hour dispute window has not elapsed yet. Remaining: {rem} seconds.")
+
+        amount = ms.amount
+        is_release = "100%" in ms.reason or "RELEASE" in ms.reason
+
+        if is_release:
+            ms.status = "APPROVED"
+            ms.reason = f"✓ [PAYOUT FINALIZED (100%)] 24h cooling-off window cleared without dispute. {ms.reason}"
+            gl.get_contract_at(Address(str(grant.grantee))).emit_transfer(value=u256(amount))
+            self._update_reputation(str(grant.grantee), 10)
+            self._update_reputation(str(grant.funder), 5)
+        else:
+            half = amount // bigint(2)
+            rem_val = amount - half
+            ms.status = "PARTIAL"
+            ms.reason = f"⚠️ [PAYOUT FINALIZED (50%)] 24h cooling-off window cleared without dispute. {ms.reason}"
+            if half > bigint(0):
+                gl.get_contract_at(Address(str(grant.grantee))).emit_transfer(value=u256(half))
+            if rem_val > bigint(0):
+                gl.get_contract_at(Address(str(grant.funder))).emit_transfer(value=u256(rem_val))
+            self._update_reputation(str(grant.grantee), 5)
+            self._update_reputation(str(grant.funder), 5)
+
+        self.milestones[ms_key] = ms
+        self._maybe_close_grant(grant_id, grant)
+        return "PAYOUT_FINALIZED"
+
+    @gl.public.write
+    def dispute_milestone(self, grant_id: str, milestone_id: str, dispute_reason: str) -> str:
+        """Allows Funder to halt disbursement during the 24h cooling-off window, escalating for arbitration."""
+        if grant_id not in self.grants:
+            raise UserError("Grant not found.")
+        grant = self.grants[grant_id]
+
+        sender = str(gl.message.sender_address).lower()
+        if sender != str(grant.funder).lower():
+            raise UserError("Only the funder can dispute during the cooling-off window.")
+
+        ms_key = self._milestone_key(grant_id, milestone_id)
+        if ms_key not in self.milestones:
+            raise UserError("Milestone not found.")
+        ms = self.milestones[ms_key]
+
+        if ms.status != "AWAITING_PAYOUT":
+            raise UserError(f"Milestone is in status '{ms.status}'. Can only dispute during AWAITING_PAYOUT.")
+
+        now = self._get_current_timestamp()
+        if now > ms.payout_ready_at:
+            raise UserError("Dispute window has already elapsed.")
+
+        reason_str = str(dispute_reason).strip() if dispute_reason else "Funder disputed deliverable before payout."
+        ms.status = "ESCALATED"
+        ms.reason = f"🚨 [DISPUTED BY FUNDER IN 24H WINDOW - ESCROW FROZEN] {reason_str}"
+        self.milestones[ms_key] = ms
+        return "MILESTONE_DISPUTED"
 
     @gl.public.write
     def resolve_escalated_milestone(self, grant_id: str, milestone_id: str, verdict: str, reason: str) -> str:
@@ -479,8 +584,8 @@ class Contract(gl.Contract):
             raise UserError("Milestone not found.")
 
         ms = self.milestones[ms_key]
-        if ms.status not in ["ESCALATED", "PARTIAL", "RETRY", "CUT"]:
-            raise UserError(f"Milestone in status '{ms.status}' cannot be appealed. Must be ESCALATED, PARTIAL, RETRY, or CUT.")
+        if ms.status not in ["ESCALATED", "PARTIAL", "RETRY", "CUT", "AWAITING_PAYOUT"]:
+            raise UserError(f"Milestone in status '{ms.status}' cannot be appealed. Must be ESCALATED, PARTIAL, RETRY, CUT, or AWAITING_PAYOUT.")
 
         sender = str(gl.message.sender_address).lower()
         if sender != str(grant.grantee).lower() and sender != str(grant.funder).lower():
@@ -534,6 +639,7 @@ class Contract(gl.Contract):
 
         proposal_str = str(grant.proposal_url)
         evidence_str = str(ms.evidence_url)
+        evidence_hash_str = str(ms.evidence_hash)
         stored_criteria = str(ms.criteria)
         stored_report = str(ms.progress_report)
         justification_str = str(appeal.justification)
@@ -558,6 +664,7 @@ class Contract(gl.Contract):
             except Exception as e:
                 ev_text = f"WEB_EXTRACTION_NOTE: {str(e)}"
 
+            # Untruncated full text evaluation for appellate jury (no [:2000] truncation)
             prompt = f"""
             You are the Senior AI Appellate Court and Supreme Arbiter on the GenLayer decentralized network.
             A grant milestone decision has been appealed with a staked financial bond.
@@ -569,14 +676,17 @@ class Contract(gl.Contract):
             SUBMITTED PROGRESS REPORT:
             {stored_report}
 
+            PINNED ARTIFACT HASH / COMMIT:
+            {evidence_hash_str if evidence_hash_str else "N/A"}
+
             APPELLANT JUSTIFICATION:
             {justification_str}
 
-            ORIGINAL EVIDENCE CONTENT:
-            {ev_text[:2000]}
+            ORIGINAL EVIDENCE CONTENT (FULL):
+            {ev_text}
 
-            SUPPLEMENTAL EVIDENCE CONTENT:
-            {supp_text[:2000]}
+            SUPPLEMENTAL EVIDENCE CONTENT (FULL):
+            {supp_text}
 
             Rules for Appellate Verdict:
             - OVERTURN: The appeal justification and evidence conclusively demonstrate that the deliverable criteria were met and the previous decision/escalation should be reversed in favor of approving the milestone.
@@ -694,7 +804,7 @@ class Contract(gl.Contract):
     @gl.public.view
     def get_reputation(self, user_address: str) -> str:
         addr = str(user_address).lower()
-        score = int(str(self.reputations[addr])) if addr in self.reputations else 0
+        score = int(str(self.reputations[addr])) if hasattr(self, "reputations") and addr in self.reputations else 0
         tier = self._get_reputation_tier(score)
         return json.dumps({
             "address": addr,
@@ -724,8 +834,8 @@ class Contract(gl.Contract):
         
         funder_addr = str(g.funder).lower()
         grantee_addr = str(g.grantee).lower()
-        funder_score = int(str(self.reputations[funder_addr])) if funder_addr in self.reputations else 0
-        grantee_score = int(str(self.reputations[grantee_addr])) if grantee_addr in self.reputations else 0
+        funder_score = int(str(self.reputations[funder_addr])) if hasattr(self, "reputations") and funder_addr in self.reputations else 0
+        grantee_score = int(str(self.reputations[grantee_addr])) if hasattr(self, "reputations") and grantee_addr in self.reputations else 0
 
         ms_list = []
         total_ms = int(str(g.num_milestones))
@@ -734,7 +844,7 @@ class Contract(gl.Contract):
             if ms_key in self.milestones:
                 m = self.milestones[ms_key]
                 appeal_data = None
-                if ms_key in self.appeals:
+                if hasattr(self, "appeals") and ms_key in self.appeals:
                     ap = self.appeals[ms_key]
                     appeal_data = {
                         "appellant": str(ap.appellant),
@@ -750,10 +860,12 @@ class Contract(gl.Contract):
                     "amount": str(m.amount),
                     "criteria": getattr(m, "criteria", "Milestone Criteria"),
                     "evidence_url": m.evidence_url,
+                    "evidence_hash": getattr(m, "evidence_hash", ""),
                     "progress_report": getattr(m, "progress_report", ""),
                     "status": m.status,
                     "attempts": str(m.attempts),
                     "reason": m.reason,
+                    "payout_ready_at": str(getattr(m, "payout_ready_at", 0)),
                     "appeal": appeal_data
                 })
                 
@@ -782,8 +894,8 @@ class Contract(gl.Contract):
                 g = self.grants[gid]
                 funder_addr = str(g.funder).lower()
                 grantee_addr = str(g.grantee).lower()
-                funder_score = int(str(self.reputations[funder_addr])) if funder_addr in self.reputations else 0
-                grantee_score = int(str(self.reputations[grantee_addr])) if grantee_addr in self.reputations else 0
+                funder_score = int(str(self.reputations[funder_addr])) if hasattr(self, "reputations") and funder_addr in self.reputations else 0
+                grantee_score = int(str(self.reputations[grantee_addr])) if hasattr(self, "reputations") and grantee_addr in self.reputations else 0
 
                 ms_list = []
                 total_ms = int(str(g.num_milestones))
@@ -792,7 +904,7 @@ class Contract(gl.Contract):
                     if ms_key in self.milestones:
                         m = self.milestones[ms_key]
                         appeal_data = None
-                        if ms_key in self.appeals:
+                        if hasattr(self, "appeals") and ms_key in self.appeals:
                             ap = self.appeals[ms_key]
                             appeal_data = {
                                 "appellant": str(ap.appellant),
@@ -807,10 +919,12 @@ class Contract(gl.Contract):
                             "amount": str(m.amount),
                             "criteria": getattr(m, "criteria", "Milestone Criteria"),
                             "evidence_url": m.evidence_url,
+                            "evidence_hash": getattr(m, "evidence_hash", ""),
                             "progress_report": getattr(m, "progress_report", ""),
                             "status": m.status,
                             "attempts": str(m.attempts),
                             "reason": m.reason,
+                            "payout_ready_at": str(getattr(m, "payout_ready_at", 0)),
                             "appeal": appeal_data
                         })
                 res.append({

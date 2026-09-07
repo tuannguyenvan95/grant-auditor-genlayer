@@ -52,7 +52,7 @@ declare global {
 const CONTRACT_ADDRESS = '0x1E10Ed7060c2AD81991894B4056a2F454bffC589';
 const EXPLORER_BASE_URL = "https://explorer-studio.genlayer.com";
 
-type VerdictStatus = 'PENDING' | 'SUBMITTED' | 'APPROVED' | 'PARTIAL' | 'CUT' | 'ESCALATED' | 'RETRY' | 'APPEALED';
+type VerdictStatus = 'PENDING' | 'SUBMITTED' | 'AWAITING_PAYOUT' | 'APPROVED' | 'PARTIAL' | 'CUT' | 'ESCALATED' | 'RETRY' | 'APPEALED';
 
 interface AppealData {
   appellant: string;
@@ -76,12 +76,15 @@ interface Milestone {
   status: VerdictStatus;
   progressReport: string;
   evidenceUrl: string;
+  evidenceHash?: string;
   llmVerdict?: string;
   llmReasoning?: string;
   confidenceScore?: number;
   payoutExecuted?: string;
   attempts?: number;
   cooldownExpiresAt?: number;
+  payoutReadyAt?: number;
+  reason?: string;
   appeal?: AppealData;
 }
 
@@ -215,13 +218,20 @@ export function App() {
   const [isDeploying, setIsDeploying] = useState(false);
   const [rpcError, setRpcError] = useState<string | null>(null);
 
-  // Milestone Deliverable Actions (Report Text + Evidence URL)
+  // Milestone Deliverable Actions (Report Text + Evidence URL + Artifact Hash Pinning)
   const [reportInputs, setReportInputs] = useState<Record<string, string>>({});
   const [evidenceInputs, setEvidenceInputs] = useState<Record<string, string>>({});
+  const [evidenceHashInputs, setEvidenceHashInputs] = useState<Record<string, string>>({});
   const [submittingKey, setSubmittingKey] = useState<string | null>(null);
   const [adjudicatingKey, setAdjudicatingKey] = useState<string | null>(null);
   const [validatorProgress, setValidatorProgress] = useState<number>(0);
   const [activeStepText, setActiveStepText] = useState<string>("");
+
+  // 24H Dispute Cooling-Off Window Actions (finalize_milestone_payout & dispute_milestone)
+  const [finalizingPayoutKey, setFinalizingPayoutKey] = useState<string | null>(null);
+  const [disputingKey, setDisputingKey] = useState<string | null>(null);
+  const [disputeReasonInput, setDisputeReasonInput] = useState<Record<string, string>>({});
+  const [isDisputeModalOpen, setIsDisputeModalOpen] = useState<Record<string, boolean>>({});
 
   // DAO Arbitration Actions (resolve_escalated_milestone)
   const [arbitrationVerdict, setArbitrationVerdict] = useState<Record<string, 'RELEASE' | 'PARTIAL' | 'CUT'>>({});
@@ -761,10 +771,11 @@ export function App() {
       const client = getGenLayerClient();
       try {
         const progressReport = (report && report.trim().length > 0) ? report.trim() : `Milestone deliverable submitted via GrantAuditor workstation for ${grantId}`;
+        const evidenceHash = (evidenceHashInputs[key] || "").trim();
         const txHash = await client.writeContract({
           address: CONTRACT_ADDRESS as `0x${string}`,
           functionName: 'submit_evidence',
-          args: [contractGrantId, contractMilestoneId, url, progressReport],
+          args: [contractGrantId, contractMilestoneId, url, progressReport, evidenceHash],
           value: 0n
         });
         // eslint-disable-next-line @typescript-eslint/ban-ts-comment
@@ -1060,6 +1071,130 @@ export function App() {
       addLog(`DAO Arbitration Error: ${errMsg}`, "ERROR");
     } finally {
       setArbitratingKey(null);
+    }
+  };
+
+  // 24H Dispute Cooling-Off Window: Finalize payout after 24h elapses
+  const handleFinalizePayout = async (grant: Grant, milestone: Milestone) => {
+    const key = `${grant.grantId}-${milestone.id}`;
+    const contractGrantId = grant.onChainId || grant.grantId;
+    const contractMilestoneId = String(milestone.id - 1);
+
+    setFinalizingPayoutKey(key);
+    addLog(`[Finalize Payout] Releasing funds for Grant ${contractGrantId}, Tranche #${milestone.id} after cooling-off window...`, "TX");
+
+    try {
+      const client = getGenLayerClient();
+      const txHash = await client.writeContract({
+        address: CONTRACT_ADDRESS as `0x${string}`,
+        functionName: 'finalize_milestone_payout',
+        args: [contractGrantId, contractMilestoneId],
+        value: 0n
+      });
+
+      addLog(`Finalize payout transaction broadcasted! TX: ${txHash}. Awaiting block confirmation...`, "INFO", txHash);
+
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
+      const receipt = await client.waitForTransactionReceipt({ hash: txHash });
+      const rcpt = receipt as any;
+      const hasError = rcpt?.status === 0 || rcpt?.status_name === 'REJECTED' || 
+                       rcpt?.data?.execution_result === 'ERROR' || 
+                       rcpt?.data?.leader_error != null;
+      if (hasError) {
+        let errorMsg = 'Finalize payout failed or rejected by GenLayer consensus.';
+        if (rcpt?.data?.leader_error) errorMsg = String(rcpt.data.leader_error);
+        throw new Error(errorMsg);
+      }
+
+      setGrants(prev => prev.map(g => {
+        if (g.grantId !== grant.grantId) return g;
+        const updatedMilestones = g.milestones.map(m => {
+          if (m.id !== milestone.id) return m;
+          const isRelease = (m.reason || "").includes("100%") || (m.reason || "").includes("RELEASE");
+          return {
+            ...m,
+            status: (isRelease ? 'APPROVED' : 'PARTIAL') as VerdictStatus,
+            payoutExecuted: isRelease ? `Paid 100% (${m.amount} GEN) to Grantee` : `Split 50% (${m.amount / 2} GEN) to Grantee`
+          };
+        });
+        const allSettled = updatedMilestones.every(m => ['APPROVED', 'PARTIAL', 'CUT'].includes(m.status));
+        return {
+          ...g,
+          isSettled: allSettled,
+          milestones: updatedMilestones
+        };
+      }));
+
+      addLog(`🎉 [Payout Finalized] Milestone #${milestone.id} funds successfully released on-chain! TX: ${txHash}`, "SUCCESS", txHash);
+    } catch (e: unknown) {
+      const errMsg = e instanceof Error ? e.message : String(e);
+      setRpcError(`Finalize Payout Error:\n\n${errMsg}`);
+      addLog(`Finalize Payout Error: ${errMsg}`, "ERROR");
+    } finally {
+      setFinalizingPayoutKey(null);
+    }
+  };
+
+  // 24H Dispute Cooling-Off Window: Funder halts payout and escalates
+  const handleDisputeMilestone = async (grant: Grant, milestone: Milestone) => {
+    const key = `${grant.grantId}-${milestone.id}`;
+    const reason = (disputeReasonInput[key] || "").trim() || "Funder disputed deliverable during cooling-off window.";
+    const contractGrantId = grant.onChainId || grant.grantId;
+    const contractMilestoneId = String(milestone.id - 1);
+
+    setDisputingKey(key);
+    addLog(`[Dispute Milestone] Freezing escrow for Grant ${contractGrantId}, Tranche #${milestone.id}...`, "TX");
+
+    try {
+      const client = getGenLayerClient();
+      const txHash = await client.writeContract({
+        address: CONTRACT_ADDRESS as `0x${string}`,
+        functionName: 'dispute_milestone',
+        args: [contractGrantId, contractMilestoneId, reason],
+        value: 0n
+      });
+
+      addLog(`Dispute transaction broadcasted! TX: ${txHash}. Awaiting block confirmation...`, "INFO", txHash);
+
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
+      const receipt = await client.waitForTransactionReceipt({ hash: txHash });
+      const rcpt = receipt as any;
+      const hasError = rcpt?.status === 0 || rcpt?.status_name === 'REJECTED' || 
+                       rcpt?.data?.execution_result === 'ERROR' || 
+                       rcpt?.data?.leader_error != null;
+      if (hasError) {
+        let errorMsg = 'Dispute transaction failed or rejected by GenLayer consensus.';
+        if (rcpt?.data?.leader_error) errorMsg = String(rcpt.data.leader_error);
+        throw new Error(errorMsg);
+      }
+
+      setGrants(prev => prev.map(g => {
+        if (g.grantId !== grant.grantId) return g;
+        const updatedMilestones = g.milestones.map(m => {
+          if (m.id !== milestone.id) return m;
+          return {
+            ...m,
+            status: 'ESCALATED' as VerdictStatus,
+            llmVerdict: 'DISPUTED BY FUNDER',
+            llmReasoning: reason
+          };
+        });
+        return {
+          ...g,
+          milestones: updatedMilestones
+        };
+      }));
+
+      setIsDisputeModalOpen(prev => ({ ...prev, [key]: false }));
+      addLog(`🚨 [Dispute Active] Escrow halted for Milestone #${milestone.id}, escalated to DAO! TX: ${txHash}`, "SUCCESS", txHash);
+    } catch (e: unknown) {
+      const errMsg = e instanceof Error ? e.message : String(e);
+      setRpcError(`Dispute Error:\n\n${errMsg}`);
+      addLog(`Dispute Error: ${errMsg}`, "ERROR");
+    } finally {
+      setDisputingKey(null);
     }
   };
 
@@ -1874,6 +2009,11 @@ export function App() {
                               <AlertTriangle className="w-4 h-4 mr-1.5 text-indigo-400" /> Verdict: ESCALATED
                             </span>
                           )}
+                          {ms.status === 'AWAITING_PAYOUT' && (
+                            <span className="px-4 py-2 rounded-xl text-xs font-mono font-extrabold uppercase bg-amber-500/25 text-amber-300 border border-amber-500/70 flex items-center shadow-md animate-pulse">
+                              <Clock className="w-4 h-4 mr-1.5 text-amber-400" /> ⏳ AWAITING PAYOUT (24H DISPUTE WINDOW)
+                            </span>
+                          )}
                           {ms.status === 'SUBMITTED' && !isCurrentlyJudging && (
                             <span className="px-4 py-2 rounded-xl text-xs font-mono font-extrabold uppercase bg-indigo-500/30 text-indigo-200 border border-indigo-500/60 flex items-center shadow-md">
                               <Sparkles className="w-4 h-4 mr-1.5 text-cyan-400 animate-spin" /> Awaiting AI Verdict
@@ -1994,9 +2134,21 @@ export function App() {
                                   />
                                 </div>
 
+                                {/* Artifact Pinning (Optional Git Commit SHA / Hash) */}
+                                <div className="space-y-1.5">
+                                  <label className="block text-xs font-mono text-zinc-400 uppercase font-bold">2. Artifact Pinning (Optional Git Commit Hash / SHA-256 Digest)</label>
+                                  <input
+                                    type="text"
+                                    placeholder="e.g. 7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1f or commit SHA"
+                                    value={evidenceHashInputs[`${activeGrant.grantId}-${ms.id}`] || ""}
+                                    onChange={(e) => setEvidenceHashInputs({ ...evidenceHashInputs, [`${activeGrant.grantId}-${ms.id}`]: e.target.value })}
+                                    className="w-full bg-[#111422] border border-zinc-700/90 rounded-xl px-4 py-2.5 text-xs sm:text-sm text-white placeholder-zinc-500 font-mono focus:outline-none focus:border-cyan-400 transition-colors shadow-inner"
+                                  />
+                                </div>
+
                                 {/* Evidence Link & Submit */}
                                 <div className="space-y-1.5">
-                                  <label className="block text-xs font-mono text-zinc-400 uppercase font-bold">2. Public Evidence URL (GitHub PR, Notion Doc, Website, Demo Video)</label>
+                                  <label className="block text-xs font-mono text-zinc-400 uppercase font-bold">3. Public Evidence URL (GitHub PR, Notion Doc, Website, Demo Video)</label>
                                   <div className="flex flex-col sm:flex-row gap-3">
                                     <div className="flex-1 relative">
                                       <GitPullRequest className="w-4 h-4 text-zinc-400 absolute left-4 top-3.5" />
@@ -2204,6 +2356,83 @@ export function App() {
                                 <ExternalLink className="w-3.5 h-3.5" />
                               </a>
                             </div>
+
+                            {/* 24H Dispute Cooling-Off Window Action Panel for AWAITING_PAYOUT Milestones */}
+                            {ms.status === 'AWAITING_PAYOUT' && (
+                              <div className="p-6 rounded-2xl bg-gradient-to-br from-amber-950/70 via-[#100f1c] to-[#090b16] border-2 border-amber-500/80 space-y-5 shadow-2xl mt-4 font-mono">
+                                <div className="flex items-center justify-between border-b border-amber-800/60 pb-3">
+                                  <span className="text-xs sm:text-sm font-black text-amber-300 uppercase tracking-wide flex items-center">
+                                    <Clock className="w-5 h-5 mr-2 text-amber-400 animate-pulse" />
+                                    24-Hour Dispute Cooling-Off Window Active (Steward Escrow Standard)
+                                  </span>
+                                  <span className="text-[10px] sm:text-xs px-2.5 py-1 rounded-lg bg-amber-950 text-amber-200 border border-amber-600 font-bold animate-pulse">
+                                    Funds Protected
+                                  </span>
+                                </div>
+
+                                <p className="text-xs text-zinc-300 font-sans leading-relaxed">
+                                  AI Consensus has conditionally verified this milestone deliverable. To protect against transient hallucination or spoofing, funds are held in escrow for a 24-hour cooling-off window. Funder/DAO can inspect evidence and dispute before release.
+                                </p>
+
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+                                  <button
+                                    disabled={finalizingPayoutKey === `${activeGrant.grantId}-${ms.id}`}
+                                    onClick={() => handleFinalizePayout(activeGrant, ms)}
+                                    className="py-4 px-6 bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-400 text-black font-mono font-black text-xs sm:text-sm uppercase tracking-wider rounded-xl shadow-xl hover:opacity-95 transform hover:-translate-y-0.5 transition-all cursor-pointer flex items-center justify-center space-x-2 disabled:opacity-50"
+                                  >
+                                    {finalizingPayoutKey === `${activeGrant.grantId}-${ms.id}` ? (
+                                      <>
+                                        <div className="w-4 h-4 border-2 border-black border-t-transparent rounded-full animate-spin"></div>
+                                        <span>Finalizing On-Chain Payout...</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <CheckCircle2 className="w-5 h-5 stroke-[2.5]" />
+                                        <span>Finalize Milestone Payout (finalize_milestone_payout)</span>
+                                      </>
+                                    )}
+                                  </button>
+
+                                  <button
+                                    onClick={() => setIsDisputeModalOpen(prev => ({ ...prev, [`${activeGrant.grantId}-${ms.id}`]: !prev[`${activeGrant.grantId}-${ms.id}`] }))}
+                                    className="py-4 px-6 bg-rose-950/80 hover:bg-rose-900 border border-rose-500 text-rose-300 font-mono font-black text-xs sm:text-sm uppercase tracking-wider rounded-xl shadow-xl hover:opacity-95 transition-all cursor-pointer flex items-center justify-center space-x-2"
+                                  >
+                                    <AlertTriangle className="w-5 h-5" />
+                                    <span>Dispute Deliverable (Halt Escrow)</span>
+                                  </button>
+                                </div>
+
+                                {isDisputeModalOpen[`${activeGrant.grantId}-${ms.id}`] && (
+                                  <div className="space-y-3 p-4 bg-[#0e0a14] rounded-xl border border-rose-800/80 animate-fadeIn">
+                                    <label className="block text-xs font-bold text-rose-300 uppercase">Reason for Halting Payment & Escalating to DAO:</label>
+                                    <input
+                                      type="text"
+                                      placeholder="e.g. Code does not pass test assertions, deliverable contains copied artifacts..."
+                                      value={disputeReasonInput[`${activeGrant.grantId}-${ms.id}`] || ""}
+                                      onChange={(e) => setDisputeReasonInput({ ...disputeReasonInput, [`${activeGrant.grantId}-${ms.id}`]: e.target.value })}
+                                      className="w-full bg-[#170e1c] border border-rose-700/80 rounded-xl px-4 py-2.5 text-xs text-white placeholder-zinc-500 font-sans focus:outline-none focus:border-rose-400"
+                                    />
+                                    <button
+                                      disabled={disputingKey === `${activeGrant.grantId}-${ms.id}`}
+                                      onClick={() => handleDisputeMilestone(activeGrant, ms)}
+                                      className="w-full py-3 bg-gradient-to-r from-rose-600 to-red-700 text-white font-black text-xs uppercase tracking-wider rounded-xl shadow-lg hover:opacity-95 transition-all cursor-pointer flex items-center justify-center space-x-2 disabled:opacity-50"
+                                    >
+                                      {disputingKey === `${activeGrant.grantId}-${ms.id}` ? (
+                                        <>
+                                          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                                          <span>Broadcasting Dispute on-chain...</span>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <ShieldAlert className="w-4 h-4" />
+                                          <span>Confirm Dispute & Escalate Milestone (dispute_milestone)</span>
+                                        </>
+                                      )}
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            )}
 
                             {/* On-Chain DAO Arbitration Action Panel for ESCALATED Milestones */}
                             {ms.status === 'ESCALATED' && (

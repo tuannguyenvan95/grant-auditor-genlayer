@@ -259,5 +259,49 @@ class TestGrantAuditorAppealSuite(unittest.TestCase):
         self.assertEqual(rep2["score"], 110)
         self.assertEqual(rep2["tier"], "Platinum Elite")
 
+    def test_05_awaiting_payout_cooling_off_and_finalize(self):
+        """Tests that AWAITING_PAYOUT blocks premature payout, then finalizes after cooling off."""
+        ms = self.contract.milestones[f"{self.gid}_0"]
+        ms.status = "AWAITING_PAYOUT"
+        # Set ready in future
+        ms.payout_ready_at = MockBigInt(2000000000)
+        ms.reason = "Awaiting payout 100% RELEASE"
+        self.contract.milestones[f"{self.gid}_0"] = ms
+
+        # Mock current time before payout_ready_at -> FAILS
+        self.contract._get_current_timestamp = lambda: MockBigInt(1900000000)
+        with self.assertRaises(MockUserError):
+            self.contract.finalize_milestone_payout(self.gid, "0")
+
+        # Mock current time after payout_ready_at -> SUCCEEDS
+        self.contract._get_current_timestamp = lambda: MockBigInt(2000000001)
+        res = self.contract.finalize_milestone_payout(self.gid, "0")
+        self.assertEqual(res, "PAYOUT_FINALIZED")
+        ms = self.contract.milestones[f"{self.gid}_0"]
+        self.assertEqual(ms.status, "APPROVED")
+        self.assertEqual(len(self.gl.transfers), 1)
+        self.assertEqual(self.gl.transfers[0]["to"], self.grantee)
+        self.assertEqual(self.gl.transfers[0]["value"], 1000)
+
+    def test_06_awaiting_payout_disputed_by_funder_escalates(self):
+        """Tests that Funder can dispute during 24h cooling off, escalating milestone."""
+        ms = self.contract.milestones[f"{self.gid}_0"]
+        ms.status = "AWAITING_PAYOUT"
+        ms.payout_ready_at = MockBigInt(2000000000)
+        self.contract.milestones[f"{self.gid}_0"] = ms
+
+        self.contract._get_current_timestamp = lambda: MockBigInt(1900000000)
+        # Stranger disputes -> FAILS
+        self.gl.message.sender_address = self.stranger
+        with self.assertRaises(MockUserError):
+            self.contract.dispute_milestone(self.gid, "0", "Disputing")
+
+        # Funder disputes -> SUCCEEDS
+        self.gl.message.sender_address = self.funder
+        res = self.contract.dispute_milestone(self.gid, "0", "Suspected plagiarism detected")
+        self.assertEqual(res, "MILESTONE_DISPUTED")
+        ms = self.contract.milestones[f"{self.gid}_0"]
+        self.assertEqual(ms.status, "ESCALATED")
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

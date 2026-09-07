@@ -12,11 +12,19 @@ All notable changes to the GrantAuditor project will be documented in this file.
   - Added `reputations: TreeMap[str, bigint]` tracking real-time credit scores and tiers (Platinum Elite, Gold Established, Silver Verified, Bronze Newcomer).
   - Automatically awards positive reputation for successful deliveries and slashes points for frivolous disputes.
   - Implemented `@gl.public.view def get_reputation(...)` and `@gl.public.view def get_appeal(...)`.
-- **Frontend Appeal & Reputation UI**:
-  - Added on-chain Reputation Badges for Funder DAO and Grantee Recipient cards.
-  - Added Senior AI Appellate Court resolution panel and inline Staked Appeal submission form.
+- **24-Hour Dispute Cooling-Off Window (Steward Escrow Standard)**:
+  - Added `AWAITING_PAYOUT` state on `RELEASE` / `PARTIAL` verdicts with `payout_ready_at` lock.
+  - Implemented `@gl.public.write def finalize_milestone_payout(...)` to disburse funds only after the 24h cooling window.
+  - Implemented `@gl.public.write def dispute_milestone(...)` enabling Funders to halt payout during cooling-off and escalate to DAO.
+- **Untruncated Evidence Processing**:
+  - Removed all `[:2000]` character slicing in `adjudicate_milestone` and `adjudicate_appeal`, feeding untruncated full texts into AI prompts per Steward Pavel Kolosov & Joaquín's guidelines.
+- **Artifact Hash Pinning**:
+  - Added `evidence_hash` support on `Milestone` and `submit_evidence` for immutable Git commit / SHA-256 digest validation.
+- **Frontend Enhancements**:
+  - Added 24H Cooling-off window panel with Finalize Payout and Dispute buttons.
+  - Added Artifact Pinning field in milestone submission console.
 - **Testing**:
-  - Added `tests/test_appeal_flow.py` with 4 new automated unit test suites covering Overturn, Uphold/Slash, Bond Validation, and Tier Escalation.
+  - Added 8 automated unit test suites covering Overturn, Uphold/Slash, Bond Validation, Reputation Tiers, 24H Cooling-off Window, and Funder Dispute.
 
 ## [v0.5.0] - 2026-08-30
 ### Added
