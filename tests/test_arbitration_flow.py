@@ -79,10 +79,12 @@ mock_mod.TreeMap = dict
 sys.modules["genlayer"] = mock_mod
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "contracts")))
 import grant_auditor as contract_module
+MockUserError = contract_module.UserError
 
 class TestGrantAuditorArbitrationSuite(unittest.TestCase):
     def setUp(self):
         self.gl = mock_mod.gl
+        contract_module.gl = self.gl
         self.gl.transfers = []
         self.funder = MockAddress("0xfunder")
         self.grantee = MockAddress("0xgrantee")
