@@ -86,6 +86,10 @@ interface Milestone {
   payoutReadyAt?: number;
   reason?: string;
   appeal?: AppealData;
+  disbursedToGrantee?: number;
+  disbursedToFunder?: number;
+  remainingLiability?: number;
+  appealCount?: number;
 }
 
 interface Grant {
@@ -343,6 +347,11 @@ export function App() {
                 defaultVerdict = `SUBMITTED (Attempt ${attempts || 1}/3) - Ready for AI Judge`;
                 defaultReason = chainReason || "Evidence submitted on-chain. Awaiting validator execution of gl.nondet.exec_prompt.";
               }
+              const disbGrantee = m.disbursed_to_grantee ? Number(BigInt(m.disbursed_to_grantee) / WEI_MULTIPLIER) : 0;
+              const disbFunder = m.disbursed_to_funder ? Number(BigInt(m.disbursed_to_funder) / WEI_MULTIPLIER) : 0;
+              const remLiab = m.remaining_liability ? Number(BigInt(m.remaining_liability) / WEI_MULTIPLIER) : (msAmt - disbGrantee - disbFunder);
+              const appealCount = Number(m.appeal_count || 0);
+
               return {
                 id: Number(m.id) + 1,
                 title: `Milestone Tranche #${Number(m.id) + 1} (${Math.round((msAmt / totalAmt) * 100)}%)`,
@@ -353,7 +362,11 @@ export function App() {
                 evidenceUrl: m.evidence_url,
                 llmVerdict: defaultVerdict,
                 llmReasoning: defaultReason,
-                attempts: attempts
+                attempts: attempts,
+                disbursedToGrantee: disbGrantee,
+                disbursedToFunder: disbFunder,
+                remainingLiability: remLiab,
+                appealCount: appealCount
               };
             })
           };
@@ -421,7 +434,11 @@ export function App() {
                   evidenceUrl: ocm.evidenceUrl || exM.evidenceUrl,
                   progressReport: report,
                   llmVerdict: verdict || ocm.llmVerdict,
-                  llmReasoning: reasoning || ocm.llmReasoning
+                  llmReasoning: reasoning || ocm.llmReasoning,
+                  disbursedToGrantee: ocm.disbursedToGrantee,
+                  disbursedToFunder: ocm.disbursedToFunder,
+                  remainingLiability: ocm.remainingLiability,
+                  appealCount: ocm.appealCount
                 };
               });
 
@@ -2582,12 +2599,18 @@ export function App() {
                                     <ShieldAlert className="w-4 h-4 mr-2 text-cyan-400" />
                                     Dispute Resolution: Stake-Based Appeal Protocol
                                   </span>
-                                  <button
-                                    onClick={() => setActiveAppealModalKey(activeAppealModalKey === `${activeGrant.grantId}-${ms.id}` ? null : `${activeGrant.grantId}-${ms.id}`)}
-                                    className="text-[11px] px-3 py-1 rounded-lg bg-cyan-950 text-cyan-300 border border-cyan-700 font-bold hover:bg-cyan-900 transition-colors cursor-pointer"
-                                  >
-                                    {activeAppealModalKey === `${activeGrant.grantId}-${ms.id}` ? 'Cancel' : '⚖️ Break Deadlock (File Appeal)'}
-                                  </button>
+                                  {(ms.appealCount && ms.appealCount >= 1) ? (
+                                    <span className="text-[10px] px-2.5 py-1 rounded-lg bg-amber-950/70 text-amber-300 border border-amber-800 font-bold">
+                                      Single Appeal Limit Reached
+                                    </span>
+                                  ) : (
+                                    <button
+                                      onClick={() => setActiveAppealModalKey(activeAppealModalKey === `${activeGrant.grantId}-${ms.id}` ? null : `${activeGrant.grantId}-${ms.id}`)}
+                                      className="text-[11px] px-3 py-1 rounded-lg bg-cyan-950 text-cyan-300 border border-cyan-700 font-bold hover:bg-cyan-900 transition-colors cursor-pointer"
+                                    >
+                                      {activeAppealModalKey === `${activeGrant.grantId}-${ms.id}` ? 'Cancel' : '⚖️ Break Deadlock (File Appeal)'}
+                                    </button>
+                                  )}
                                 </div>
 
                                 {activeAppealModalKey === `${activeGrant.grantId}-${ms.id}` && (

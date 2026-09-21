@@ -2,6 +2,28 @@
 
 All notable changes to the GrantAuditor project will be documented in this file.
 
+## [v0.6.2] - 2026-09-21
+### Added
+- **Formal Invariant & Solvency Test Suite (`tests/test_liability_invariants.py`)**:
+  - Added 5 comprehensive contract test suites verifying mathematical solvency:
+    1. Partial release (50%) followed by appeal `OVERTURN` (Grantee wins): pays only remaining 50% liability + refunds stake; prevents double-disbursement.
+    2. Partial release (50%) followed by appeal `UPHELD` (Appeal rejected): refunds remaining 50% liability to funder + slashes stake to funder.
+    3. Single appeal per milestone enforcement: rejects repeated appeal attempts with `UserError`.
+    4. Multi-milestone grant lifecycle solvency: proves total payouts strictly never exceed total funding + stakes across all milestone combinations.
+    5. Cooling-off window finalization without appeal: refunds remaining 50% liability to funder after 24h.
+  - Assertions prove $\sum \text{Payouts} \le \text{Total Funding} + \sum \text{Stakes}$.
+
+### Changed
+- **Anti-Double-Disbursement & Liability Tracking (`contracts/grant_auditor.py`)**:
+  - Added `disbursed_to_grantee: bigint`, `disbursed_to_funder: bigint`, and `appeal_count: bigint` to `Milestone` storage schema.
+  - In `adjudicate_appeal`, when verdict is `OVERTURN`, contract releases *only* the remaining undisbursed liability (`ms.amount - ms.disbursed_to_grantee`), strictly preventing already-paid milestone value from being disbursed again.
+  - When verdict is `UPHELD`, contract refunds *only* the remaining undisbursed liability (`ms.amount - ms.disbursed_to_grantee - ms.disbursed_to_funder`).
+- **Reserved Liability Through Appeal Window**:
+  - In `adjudicate_milestone` upon `PARTIAL` verdict, the undisputed 50% tranche is released to grantee while the remaining 50% liability is strictly reserved in escrow through the 24h dispute/appeal window.
+  - If no appeal is filed, `finalize_milestone_payout` refunds the reserved 50% liability to the funder.
+- **Single Appeal Per Milestone**:
+  - Enforced in `file_appeal`: each milestone can only be appealed once. Any repeat attempt reverts with `UserError`.
+
 ## [v0.6.0] - 2026-09-07
 ### Added
 - **Stake-Based Appeal Protocol (Category 3b Major Feature)**:

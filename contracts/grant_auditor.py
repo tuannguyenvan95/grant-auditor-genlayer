@@ -16,6 +16,9 @@ class Milestone:
     attempts: bigint
     reason: str
     payout_ready_at: bigint # Timestamp after which cooling-off window clears for final payout
+    disbursed_to_grantee: bigint # Cumulative amount already paid out to grantee
+    disbursed_to_funder: bigint  # Cumulative amount refunded back to funder
+    appeal_count: bigint         # Strict counter enforcing single appeal per milestone
 
 @allow_storage
 @dataclass
@@ -177,7 +180,10 @@ class Contract(gl.Contract):
                 status="PENDING",
                 attempts=bigint(0),
                 reason="Awaiting deliverable submission.",
-                payout_ready_at=bigint(0)
+                payout_ready_at=bigint(0),
+                disbursed_to_grantee=bigint(0),
+                disbursed_to_funder=bigint(0),
+                appeal_count=bigint(0)
             )
 
         new_grant = Grant(
@@ -414,9 +420,17 @@ class Contract(gl.Contract):
         elif verdict == "PARTIAL":
             half = amount // bigint(2)
             payout_amount = half
+            # Disburse the undisputed 50% partial release to grantee immediately
+            unpaid_grantee = max(bigint(0), half - getattr(ms, "disbursed_to_grantee", bigint(0)))
+            if unpaid_grantee > bigint(0):
+                gl.get_contract_at(Address(str(grant.grantee))).emit_transfer(value=u256(unpaid_grantee))
+                ms.disbursed_to_grantee = getattr(ms, "disbursed_to_grantee", bigint(0)) + unpaid_grantee
+                self._update_reputation(str(grant.grantee), 5)
+
+            # The remaining 50% liability is strictly RESERVED in escrow through the 24h dispute/appeal window
             ms.status = "AWAITING_PAYOUT"
             ms.payout_ready_at = now + bigint(86400)
-            ms.reason = f"⏳ [AWAITING PAYOUT - 24H DISPUTE WINDOW] Partial fulfillment verified 50/50 (Attempt {int(str(ms.attempts))}/3): {reason}"
+            ms.reason = f"⏳ [PARTIAL RELEASED (50%) - REMAINING 50% RESERVED FOR 24H APPEAL WINDOW] (Attempt {int(str(ms.attempts))}/3): {reason}"
         elif verdict == "RETRY":
             payout_amount = bigint(0)
             ms.status = "RETRY"
@@ -429,8 +443,11 @@ class Contract(gl.Contract):
             else:
                 payout_amount = bigint(0)
                 ms.status = "CUT"
-                ms.reason = f"🚫 [PERMANENTLY CLOSED - 3/3 Attempts Failed] {reason} | 100% Escrow Refunded back to Funder."
-                gl.get_contract_at(Address(str(grant.funder))).emit_transfer(value=u256(amount))
+                ms.reason = f"🚫 [PERMANENTLY CLOSED - 3/3 Attempts Failed] {reason} | Remaining Escrow Refunded back to Funder."
+                rem_refund = ms.amount - getattr(ms, "disbursed_to_grantee", bigint(0)) - getattr(ms, "disbursed_to_funder", bigint(0))
+                if rem_refund > bigint(0):
+                    gl.get_contract_at(Address(str(grant.funder))).emit_transfer(value=u256(rem_refund))
+                    ms.disbursed_to_funder = getattr(ms, "disbursed_to_funder", bigint(0)) + rem_refund
                 self._update_reputation(str(grant.grantee), -15)
         else:
             verdict = "ESCALATE"
@@ -465,24 +482,26 @@ class Contract(gl.Contract):
             raise UserError(f"24-hour dispute window has not elapsed yet. Remaining: {rem} seconds.")
 
         amount = ms.amount
-        is_release = "100%" in ms.reason or "RELEASE" in ms.reason
+        is_release = "100%" in ms.reason or ("RELEASE" in ms.reason and "PARTIAL" not in ms.reason)
 
         if is_release:
             ms.status = "APPROVED"
             ms.reason = f"✓ [PAYOUT FINALIZED (100%)] 24h cooling-off window cleared without dispute. {ms.reason}"
-            gl.get_contract_at(Address(str(grant.grantee))).emit_transfer(value=u256(amount))
+            rem_to_grantee = amount - getattr(ms, "disbursed_to_grantee", bigint(0))
+            if rem_to_grantee > bigint(0):
+                gl.get_contract_at(Address(str(grant.grantee))).emit_transfer(value=u256(rem_to_grantee))
+                ms.disbursed_to_grantee = getattr(ms, "disbursed_to_grantee", bigint(0)) + rem_to_grantee
             self._update_reputation(str(grant.grantee), 10)
             self._update_reputation(str(grant.funder), 5)
         else:
-            half = amount // bigint(2)
-            rem_val = amount - half
             ms.status = "PARTIAL"
-            ms.reason = f"⚠️ [PAYOUT FINALIZED (50%)] 24h cooling-off window cleared without dispute. {ms.reason}"
-            if half > bigint(0):
-                gl.get_contract_at(Address(str(grant.grantee))).emit_transfer(value=u256(half))
-            if rem_val > bigint(0):
-                gl.get_contract_at(Address(str(grant.funder))).emit_transfer(value=u256(rem_val))
-            self._update_reputation(str(grant.grantee), 5)
+            ms.reason = f"⚠️ [PAYOUT FINALIZED (50%)] 24h cooling-off window cleared without dispute. Remaining 50% liability refunded to funder. {ms.reason}"
+            # Undisputed 50% was already disbursed to grantee at partial adjudication.
+            # Now that the 24h window cleared without appeal, the remaining 50% liability is refunded to funder:
+            rem_to_funder = amount - getattr(ms, "disbursed_to_grantee", bigint(0)) - getattr(ms, "disbursed_to_funder", bigint(0))
+            if rem_to_funder > bigint(0):
+                gl.get_contract_at(Address(str(grant.funder))).emit_transfer(value=u256(rem_to_funder))
+                ms.disbursed_to_funder = getattr(ms, "disbursed_to_funder", bigint(0)) + rem_to_funder
             self._update_reputation(str(grant.funder), 5)
 
         self.milestones[ms_key] = ms
@@ -547,22 +566,31 @@ class Contract(gl.Contract):
         if target_verdict == "RELEASE":
             ms.status = "APPROVED"
             ms.reason = f"✓ [DAO ARBITRATION RESOLVED: RELEASE (100%)] {arbitration_reason}"
-            gl.get_contract_at(Address(str(grant.grantee))).emit_transfer(value=u256(amount))
+            rem_to_grantee = amount - getattr(ms, "disbursed_to_grantee", bigint(0))
+            if rem_to_grantee > bigint(0):
+                gl.get_contract_at(Address(str(grant.grantee))).emit_transfer(value=u256(rem_to_grantee))
+                ms.disbursed_to_grantee = getattr(ms, "disbursed_to_grantee", bigint(0)) + rem_to_grantee
             self._update_reputation(str(grant.grantee), 10)
         elif target_verdict == "PARTIAL":
             half = amount // bigint(2)
-            rem = amount - half
+            rem_grantee = max(bigint(0), half - getattr(ms, "disbursed_to_grantee", bigint(0)))
+            rem_funder = amount - getattr(ms, "disbursed_to_grantee", bigint(0)) - rem_grantee - getattr(ms, "disbursed_to_funder", bigint(0))
             ms.status = "PARTIAL"
             ms.reason = f"⚠️ [DAO ARBITRATION RESOLVED: PARTIAL (50%)] {arbitration_reason}"
-            if half > bigint(0):
-                gl.get_contract_at(Address(str(grant.grantee))).emit_transfer(value=u256(half))
-            if rem > bigint(0):
-                gl.get_contract_at(Address(str(grant.funder))).emit_transfer(value=u256(rem))
+            if rem_grantee > bigint(0):
+                gl.get_contract_at(Address(str(grant.grantee))).emit_transfer(value=u256(rem_grantee))
+                ms.disbursed_to_grantee = getattr(ms, "disbursed_to_grantee", bigint(0)) + rem_grantee
+            if rem_funder > bigint(0):
+                gl.get_contract_at(Address(str(grant.funder))).emit_transfer(value=u256(rem_funder))
+                ms.disbursed_to_funder = getattr(ms, "disbursed_to_funder", bigint(0)) + rem_funder
             self._update_reputation(str(grant.grantee), 5)
         elif target_verdict == "CUT":
             ms.status = "CUT"
             ms.reason = f"🚫 [DAO ARBITRATION RESOLVED: CUT (REFUND)] {arbitration_reason}"
-            gl.get_contract_at(Address(str(grant.funder))).emit_transfer(value=u256(amount))
+            rem_funder = amount - getattr(ms, "disbursed_to_grantee", bigint(0)) - getattr(ms, "disbursed_to_funder", bigint(0))
+            if rem_funder > bigint(0):
+                gl.get_contract_at(Address(str(grant.funder))).emit_transfer(value=u256(rem_funder))
+                ms.disbursed_to_funder = getattr(ms, "disbursed_to_funder", bigint(0)) + rem_funder
             self._update_reputation(str(grant.grantee), -15)
 
         self.milestones[ms_key] = ms
@@ -576,14 +604,20 @@ class Contract(gl.Contract):
         if grant_id not in self.grants:
             raise UserError("Grant not found.")
         grant = self.grants[grant_id]
-        if grant.status == "CLOSED":
-            raise UserError("Grant is closed.")
 
         ms_key = f"{grant_id}_{milestone_id}"
         if ms_key not in self.milestones:
             raise UserError("Milestone not found.")
 
         ms = self.milestones[ms_key]
+
+        # Enforce single appeal per milestone (Steward Joaquín directive)
+        if getattr(ms, "appeal_count", bigint(0)) > bigint(0) or ms_key in self.appeals:
+            raise UserError("Milestone has already been appealed. Only a single appeal per milestone is permitted.")
+
+        if grant.status == "CLOSED":
+            raise UserError("Grant is closed.")
+
         if ms.status not in ["ESCALATED", "PARTIAL", "RETRY", "CUT", "AWAITING_PAYOUT"]:
             raise UserError(f"Milestone in status '{ms.status}' cannot be appealed. Must be ESCALATED, PARTIAL, RETRY, CUT, or AWAITING_PAYOUT.")
 
@@ -611,6 +645,7 @@ class Contract(gl.Contract):
             reason="Appeal filed with staked bond. Awaiting Senior AI Appellate Jury adjudication."
         )
 
+        ms.appeal_count = getattr(ms, "appeal_count", bigint(0)) + bigint(1)
         ms.status = "APPEALED"
         ms.reason = f"⚖️ [APPEAL FILED] Staked {str(gl.message.value)} WEI bond by {sender[:10]}... Justification: {justification_str}"
         self.milestones[ms_key] = ms
@@ -759,8 +794,11 @@ class Contract(gl.Contract):
 
             # 1. Refund 100% of the staked bond to appellant
             gl.get_contract_at(Address(str(appeal.appellant))).emit_transfer(value=u256(stake_amount))
-            # 2. Release milestone payout to grantee
-            gl.get_contract_at(Address(str(grant.grantee))).emit_transfer(value=u256(ms_amount))
+            # 2. Release remaining unreleased milestone payout to grantee (NO DOUBLE PAYMENT)
+            remaining_to_grantee = ms_amount - getattr(ms, "disbursed_to_grantee", bigint(0))
+            if remaining_to_grantee > bigint(0):
+                gl.get_contract_at(Address(str(grant.grantee))).emit_transfer(value=u256(remaining_to_grantee))
+                ms.disbursed_to_grantee = getattr(ms, "disbursed_to_grantee", bigint(0)) + remaining_to_grantee
             # 3. Boost reputation
             self._update_reputation(str(appeal.appellant), 15)
             self._update_reputation(str(grant.grantee), 10)
@@ -773,8 +811,11 @@ class Contract(gl.Contract):
             # 1. Slash stake bond: transfer to counterparty
             slash_recipient = grant.funder if str(appeal.appellant).lower() == str(grant.grantee).lower() else grant.grantee
             gl.get_contract_at(Address(str(slash_recipient))).emit_transfer(value=u256(stake_amount))
-            # 2. Refund original milestone escrow back to funder
-            gl.get_contract_at(Address(str(grant.funder))).emit_transfer(value=u256(ms_amount))
+            # 2. Refund remaining undisbursed milestone escrow back to funder (NO DOUBLE REFUND)
+            remaining_to_funder = ms_amount - getattr(ms, "disbursed_to_grantee", bigint(0)) - getattr(ms, "disbursed_to_funder", bigint(0))
+            if remaining_to_funder > bigint(0):
+                gl.get_contract_at(Address(str(grant.funder))).emit_transfer(value=u256(remaining_to_funder))
+                ms.disbursed_to_funder = getattr(ms, "disbursed_to_funder", bigint(0)) + remaining_to_funder
             # 3. Slash reputation
             self._update_reputation(str(appeal.appellant), -10)
 
@@ -855,6 +896,10 @@ class Contract(gl.Contract):
                         "reason": ap.reason
                     }
 
+                disb_grantee = getattr(m, "disbursed_to_grantee", bigint(0))
+                disb_funder = getattr(m, "disbursed_to_funder", bigint(0))
+                rem_liab = m.amount - disb_grantee - disb_funder
+
                 ms_list.append({
                     "id": m.id,
                     "amount": str(m.amount),
@@ -866,6 +911,10 @@ class Contract(gl.Contract):
                     "attempts": str(m.attempts),
                     "reason": m.reason,
                     "payout_ready_at": str(getattr(m, "payout_ready_at", 0)),
+                    "disbursed_to_grantee": str(disb_grantee),
+                    "disbursed_to_funder": str(disb_funder),
+                    "remaining_liability": str(rem_liab),
+                    "appeal_count": str(getattr(m, "appeal_count", 0)),
                     "appeal": appeal_data
                 })
                 
@@ -914,6 +963,10 @@ class Contract(gl.Contract):
                                 "status": ap.status,
                                 "reason": ap.reason
                             }
+                        disb_grantee = getattr(m, "disbursed_to_grantee", bigint(0))
+                        disb_funder = getattr(m, "disbursed_to_funder", bigint(0))
+                        rem_liab = m.amount - disb_grantee - disb_funder
+
                         ms_list.append({
                             "id": m.id,
                             "amount": str(m.amount),
@@ -925,6 +978,10 @@ class Contract(gl.Contract):
                             "attempts": str(m.attempts),
                             "reason": m.reason,
                             "payout_ready_at": str(getattr(m, "payout_ready_at", 0)),
+                            "disbursed_to_grantee": str(disb_grantee),
+                            "disbursed_to_funder": str(disb_funder),
+                            "remaining_liability": str(rem_liab),
+                            "appeal_count": str(getattr(m, "appeal_count", 0)),
                             "appeal": appeal_data
                         })
                 res.append({

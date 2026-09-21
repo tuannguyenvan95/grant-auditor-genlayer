@@ -12,6 +12,9 @@ This document outlines the security architecture, threat model, and safety guard
 | **Oracle Latency Manipulation** | Non-deterministic state | **Optimistic Democracy**: Multi-validator LLM consensus verifies and votes on the leader's proposed outcome, preventing individual validator collusion. |
 | **Inactive Funder Escrow Deadlock** | Frozen funds on `ESCALATED` milestones | **Stake-Based Appeal Protocol**: Grantees or funders can file an on-chain appeal by locking a GEN bond, convening the Senior AI Appellate Court to break deadlocks without waiting for inactive multisig signers. |
 | **Frivolous Appeal / Sybil Griefing** | Malicious delay of contract settlement | **Bond Slasher Mechanism**: If an appeal is deemed invalid or frivolous by the Senior AI Jury (`UPHOLD`), 100% of the appellant's staked bond is slashed and paid to the counterparty as compensation for delay, along with reputation penalties. |
+| **Appellate Over-Disbursement** | Partial milestone payouts | **Liability Tracking**: Contract tracks cumulative `disbursed_to_grantee` and `disbursed_to_funder`. Overturned appeals disburse only `ms.amount - disbursed_to_grantee`, strictly preventing double-paying already-released funds. |
+| **Premature Escrow Refund** | Partial deliverable appeal rights | **Liability Reservation Window**: Upon `PARTIAL` verdict, remaining 50% liability is held in escrow during the 24h cooling-off window rather than refunded immediately, allowing fair appeal filing. |
+| **Repeated Appeal Spam** | Indefinite delay of payouts | **Single Appeal Invariant**: Contract enforces `appeal_count == 0` check. Any second appeal attempt on a milestone reverts immediately with `UserError`. |
 | **State Variable Loss in GenVM Sandbox** | Closure-captured mutations | **Serializable Dict Return**: All mutable extraction states (`extraction_errors`) are explicitly passed through the nondeterministic return dictionary instead of captured closures. |
 
 ---

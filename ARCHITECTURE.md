@@ -31,16 +31,25 @@ sequenceDiagram
     end
 
     alt AI Verdict: RELEASE (100% Payout)
-        Contract->>Grantee: emit_transfer (100% funds)
-        Contract->>Contract: Update Reputations (+10 Grantee, +5 Funder)
-        Note over Contract: Status: APPROVED
-    else AI Verdict: PARTIAL (50/50 Split)
-        Contract->>Grantee: emit_transfer (50% funds)
-        Contract->>Funder: emit_transfer (50% refund)
-        Contract->>Contract: Update Reputations (+5 Grantee, +5 Funder)
-        Note over Contract: Status: PARTIAL
+        Note over Contract: Status: AWAITING_PAYOUT (24h Cooling-Off Window)
+        alt 24h clears without Dispute
+            Contract->>Grantee: emit_transfer (100% funds)
+            Contract->>Contract: Update Reputations (+10 Grantee, +5 Funder)
+            Note over Contract: Status: APPROVED
+        else Funder Disputes
+            Note over Contract: Status: ESCALATED (Funds Frozen)
+        end
+    else AI Verdict: PARTIAL (50% Release)
+        Contract->>Grantee: emit_transfer (50% undisputed tranche)
+        Note over Contract: Status: AWAITING_PAYOUT (Remaining 50% liability reserved in escrow)
+        alt 24h clears without Appeal
+            Contract->>Funder: emit_transfer (50% remaining liability refund)
+            Note over Contract: Status: PARTIAL
+        else Appeal Filed
+            Note over Contract: Status: APPEALED (Remaining 50% liability remains reserved)
+        end
     else AI Verdict: CUT (100% Refund on 3rd attempt)
-        Contract->>Funder: emit_transfer (100% refund)
+        Contract->>Funder: emit_transfer (Remaining escrow refund)
         Contract->>Contract: Update Reputations (-15 Grantee)
         Note over Contract: Status: CUT
     else AI Verdict: ESCALATE (Failed Render / Disagreement)
@@ -49,12 +58,12 @@ sequenceDiagram
         opt Path A: DAO Authority Arbitration
             DAO->>Contract: resolve_escalated_milestone (Verdict + Reason)
             alt DAO Verdict
-                DAO->>Grantee: emit_transfer (Appropriate payout)
-                DAO->>Funder: emit_transfer (Appropriate refund)
+                DAO->>Grantee: emit_transfer (Remaining liability payout)
+                DAO->>Funder: emit_transfer (Remaining liability refund)
             end
         end
 
-        opt Path B: Stake-Based Appeal Protocol (Break Inactive Funder Deadlock)
+        opt Path B: Stake-Based Appeal Protocol (Single Appeal Enforced)
             Appellant->>Contract: file_appeal (Lock Staked GEN Bond + Supplemental Proof)
             Note over Contract: Status: APPEALED
             Appellant->>Contract: adjudicate_appeal
@@ -62,12 +71,12 @@ sequenceDiagram
             GenVM-->>Contract: Appellate Verdict (OVERTURN | UPHOLD)
             alt Appellate Verdict: OVERTURN (Appeal Won)
                 Contract->>Appellant: emit_transfer (100% Staked Bond Refund)
-                Contract->>Grantee: emit_transfer (100% Milestone Escrow)
-                Contract->>Contract: Update Reputations (+15 Appellant)
+                Contract->>Grantee: emit_transfer (Remaining Undisbursed Liability Only)
+                Contract->>Contract: Update Reputations (+15 Appellant, +10 Grantee)
                 Note over Contract: Status: APPROVED
             else Appellate Verdict: UPHOLD (Appeal Rejected)
                 Contract->>Funder: emit_transfer (Slashed Staked Bond)
-                Contract->>Funder: emit_transfer (100% Milestone Escrow Refund)
+                Contract->>Funder: emit_transfer (Remaining Undisbursed Liability Only)
                 Contract->>Contract: Update Reputations (-10 Appellant)
                 Note over Contract: Status: CUT
             end
