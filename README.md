@@ -9,8 +9,8 @@ Grant programs often suffer from subjective milestone evaluations. GenLayer solv
 - **Confirmed URL**: [https://grant-auditor-genlayer-xi.vercel.app](https://grant-auditor-genlayer-xi.vercel.app)
 
 ## Deployed Contract
-- **Studionet Address**: `0xc6123024C7E643e4DB233Ad578F9d68E1af1F486`
-- **Explorer Link**: [GenLayer Explorer](https://explorer-studio.genlayer.com/address/0xc6123024C7E643e4DB233Ad578F9d68E1af1F486)
+- **Studionet Address**: `0x8B2d38D4f15b49CaA7DcC6b0055d2FE6F0f81756`
+- **Explorer Link**: [GenLayer Explorer](https://explorer-studio.genlayer.com/address/0x8B2d38D4f15b49CaA7DcC6b0055d2FE6F0f81756)
 
 ## 🚀 Milestone v3: Syndicate Co-Funding & Builder Trust Protocol
 
@@ -75,7 +75,7 @@ node tests/test_payment_regression.mjs
 1. Open `.env` in the `frontend/` directory.
 2. Add your deployed Contract Address:
    ```env
-   VITE_CONTRACT_ADDRESS=0xc6123024C7E643e4DB233Ad578F9d68E1af1F486
+   VITE_CONTRACT_ADDRESS=0x8B2d38D4f15b49CaA7DcC6b0055d2FE6F0f81756
    ```
 3. Run the development server or build for production:
    ```bash
