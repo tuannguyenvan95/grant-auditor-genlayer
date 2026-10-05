@@ -2,6 +2,32 @@
 
 All notable changes to the GrantAuditor project will be documented in this file.
 
+## [v3.0.0] - 2026-10-05
+### Added
+- **Syndicate Multi-Funder Escrow Pool (`contracts/grant_auditor.py`)**:
+  - Implemented `@gl.public.write.payable def pledge_grant(grant_id, milestone_id)` allowing multiple co-funders, angel sponsors, and community members to pool GEN into any active grant milestone.
+  - Implemented `_refund_milestone_escrow` with mathematical **Proportional Clawback**: in case of milestone rejection/CUT or cancellation, remaining escrow is distributed proportionally across all contributors according to their pledge shares without rounding loss.
+  - Implemented `@gl.public.write def cancel_unstarted_grant(grant_id)` enabling safe escrow reclamation with proportional refunds if deliverables have not yet commenced.
+  - Implemented `@gl.public.view def get_grant_pledges(grant_id)` inspecting all syndicate co-funders, contributions, and share percentages.
+- **On-Chain Reputation & Trust Tier Engine (`contracts/grant_auditor.py`)**:
+  - Added granular performance attribution: `stats_completed`, `stats_failed`, `stats_appeals_won`, `stats_appeals_lost`, and `registered_users`.
+  - Implemented **Dynamic Fast-Track Adjudication**: Grantees with Gold Established ($\ge 50$ pts) or Platinum Elite ($\ge 100$ pts) trust tiers automatically unlock an accelerated **12-hour cooling-off window (43,200s)**, while Bronze/Silver tiers maintain the standard 24 hours (86,400s).
+  - Implemented `@gl.public.view def get_reputation_profile(user_address)` returning complete builder dossier (score, tier, fast-track eligibility, completion rate, win rate).
+  - Implemented `@gl.public.view def get_reputation_leaderboard()` returning top 20 ranked builders and funders on-chain.
+- **Milestone v3 Verification Suite (`tests/test_v3_syndicate_reputation.py`)**:
+  - Added 5 comprehensive automated test suites verifying:
+    1. Multi-funder syndicate pooling and pool inspector (`test_syndicate_pledge_and_accounting`).
+    2. Proportional clawback on CUT to multiple co-funders (`test_syndicate_proportional_clawback_on_cut`).
+    3. Unstarted grant cancellation and proportional refunds (`test_cancel_unstarted_grant_proportional_refund`).
+    4. Dynamic 12h Fast-Track cooling-off window vs 24h standard window (`test_dynamic_fast_track_cooling_window`).
+    5. Builder dossier analytics and on-chain leaderboard queries (`test_reputation_dossier_and_leaderboard`).
+  - Total test suite expanded to 21/21 passing tests (100% pass rate in 0.13s).
+- **Frontend Workstation Enhancements (`frontend/src/App.tsx`)**:
+  - Added Syndicate Co-Funding Modal with tranche selection and real-time contribution share calculation.
+  - Added On-Chain Leaderboard & Trust Tier Drawer displaying ranks, scores, badges, and fast-track statuses.
+  - Added dynamic `⚡ AWAITING PAYOUT (FAST-TRACK 12H)` badge on qualifying milestones.
+  - Added Emergency Grant Cancellation for unstarted grants with automatic pool recovery.
+
 ## [v0.6.2] - 2026-09-21
 ### Added
 - **Formal Invariant & Solvency Test Suite (`tests/test_liability_invariants.py`)**:

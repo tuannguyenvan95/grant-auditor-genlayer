@@ -50,6 +50,14 @@ class Contract(gl.Contract):
     appeals: TreeMap[str, Appeal]
     reputations: TreeMap[str, bigint]
     next_grant_id: bigint
+    # --- Milestone v3 Syndicate Co-Funding & Advanced Reputation Storage ---
+    pledges: TreeMap[str, bigint]             # key: f"{grant_id}_{funder_address}" -> amount pledged
+    grant_pledgers: TreeMap[str, str]         # key: grant_id -> comma-separated list of pledger addresses
+    stats_completed: TreeMap[str, bigint]     # address -> count of milestones completed
+    stats_failed: TreeMap[str, bigint]        # address -> count of milestones failed
+    stats_appeals_won: TreeMap[str, bigint]   # address -> count of appeals won
+    stats_appeals_lost: TreeMap[str, bigint]  # address -> count of appeals lost
+    registered_users: TreeMap[str, str]       # "all" -> comma-separated list of all active addresses
 
     def __init__(self):
         self.next_grant_id = bigint(1)
@@ -97,8 +105,39 @@ class Contract(gl.Contract):
         grant.status = "CLOSED"
         self.grants[grant_id] = grant
 
+    def _register_user(self, address_str: str) -> None:
+        addr = address_str.lower()
+        if not hasattr(self, "registered_users"):
+            self.registered_users = {}
+        curr = str(self.registered_users["all"]) if "all" in self.registered_users else ""
+        ulist = [u.strip().lower() for u in curr.split(",") if u.strip()]
+        if addr not in ulist:
+            ulist.append(addr)
+            self.registered_users["all"] = ",".join(ulist)
+
+    def _inc_stat(self, stat_name: str, address_str: str) -> None:
+        addr = address_str.lower()
+        self._register_user(addr)
+        target_map = None
+        if stat_name == "completed":
+            if not hasattr(self, "stats_completed"): self.stats_completed = {}
+            target_map = self.stats_completed
+        elif stat_name == "failed":
+            if not hasattr(self, "stats_failed"): self.stats_failed = {}
+            target_map = self.stats_failed
+        elif stat_name == "appeals_won":
+            if not hasattr(self, "stats_appeals_won"): self.stats_appeals_won = {}
+            target_map = self.stats_appeals_won
+        elif stat_name == "appeals_lost":
+            if not hasattr(self, "stats_appeals_lost"): self.stats_appeals_lost = {}
+            target_map = self.stats_appeals_lost
+        if target_map is not None:
+            curr = int(str(target_map[addr])) if addr in target_map else 0
+            target_map[addr] = bigint(curr + 1)
+
     def _update_reputation(self, address_str: str, delta: int) -> None:
         addr = address_str.lower()
+        self._register_user(addr)
         curr = 0
         if hasattr(self, "reputations") and addr in self.reputations:
             curr = int(str(self.reputations[addr]))
@@ -115,6 +154,49 @@ class Contract(gl.Contract):
             return "Silver Verified"
         else:
             return "Bronze Newcomer"
+
+    def _refund_milestone_escrow(self, grant_id: str, ms: Milestone, grant: Grant, amount_to_refund: bigint) -> None:
+        """Milestone v3 Proportional Refund Engine: Disburses escrow refunds proportionally among all co-funders."""
+        if amount_to_refund <= bigint(0):
+            return
+
+        pledgers_str = str(self.grant_pledgers[grant_id]) if hasattr(self, "grant_pledgers") and grant_id in self.grant_pledgers else ""
+        plist = [p.strip().lower() for p in pledgers_str.split(",") if p.strip()] if pledgers_str else []
+
+        if not plist or len(plist) <= 1:
+            gl.get_contract_at(Address(str(grant.funder))).emit_transfer(value=u256(amount_to_refund))
+            ms.disbursed_to_funder = getattr(ms, "disbursed_to_funder", bigint(0)) + amount_to_refund
+            return
+
+        total_pledged = 0
+        pledge_amts = {}
+        for p in plist:
+            p_key = f"{grant_id}_{p}"
+            val = int(str(self.pledges[p_key])) if hasattr(self, "pledges") and p_key in self.pledges else 0
+            if val > 0:
+                pledge_amts[p] = val
+                total_pledged += val
+
+        if total_pledged <= 0:
+            gl.get_contract_at(Address(str(grant.funder))).emit_transfer(value=u256(amount_to_refund))
+            ms.disbursed_to_funder = getattr(ms, "disbursed_to_funder", bigint(0)) + amount_to_refund
+            return
+
+        rem_to_distribute = int(str(amount_to_refund))
+        disbursed_total = 0
+        valid_pledgers = [p for p in plist if p in pledge_amts and pledge_amts[p] > 0]
+        for i, p in enumerate(valid_pledgers):
+            if i == len(valid_pledgers) - 1:
+                share = rem_to_distribute
+            else:
+                share = (int(str(amount_to_refund)) * pledge_amts[p]) // total_pledged
+                rem_to_distribute -= share
+
+            if share > 0:
+                gl.get_contract_at(Address(p)).emit_transfer(value=u256(bigint(share)))
+                disbursed_total += share
+
+        ms.disbursed_to_funder = getattr(ms, "disbursed_to_funder", bigint(0)) + bigint(disbursed_total)
 
     @gl.public.write.payable
     def create_grant(self, grantee: str, title: str, proposal_url: str, milestone_amounts_str: str, milestone_criteria_json: str = "") -> str:
@@ -197,7 +279,139 @@ class Contract(gl.Contract):
             status="ACTIVE"
         )
         self.grants[grant_id] = new_grant
+
+        # Record initial funding pledge and register participants
+        if not hasattr(self, "pledges"):
+            self.pledges = {}
+        self.pledges[f"{grant_id}_{funder}"] = total_amount
+        if not hasattr(self, "grant_pledgers"):
+            self.grant_pledgers = {}
+        self.grant_pledgers[grant_id] = funder
+        self._register_user(funder)
+        self._register_user(grantee)
+
         return grant_id
+
+    @gl.public.write.payable
+    def pledge_grant(self, grant_id: str, milestone_id: str = "0") -> str:
+        """Milestone v3 Syndicate Funding: Allows any backer/co-funder to contribute GEN to top up milestone escrow."""
+        if grant_id not in self.grants:
+            raise UserError("Grant not found.")
+        grant = self.grants[grant_id]
+        if grant.status == "CLOSED":
+            raise UserError("Grant is closed.")
+
+        pledge_val = bigint(gl.message.value)
+        if pledge_val <= bigint(0):
+            raise UserError("Pledge must be greater than 0 WEI.")
+
+        ms_key = self._milestone_key(grant_id, milestone_id)
+        if ms_key not in self.milestones:
+            raise UserError("Milestone not found.")
+        ms = self.milestones[ms_key]
+
+        if self._is_terminal_status(ms.status):
+            raise UserError(f"Cannot pledge to milestone in terminal status: {ms.status}")
+
+        sender = str(gl.message.sender_address).lower()
+
+        # 1. Update milestone amount and grant total
+        ms.amount += pledge_val
+        self.milestones[ms_key] = ms
+        grant.total_amount += pledge_val
+        self.grants[grant_id] = grant
+
+        # 2. Record pledge
+        p_key = f"{grant_id}_{sender}"
+        curr_p = int(str(self.pledges[p_key])) if hasattr(self, "pledges") and p_key in self.pledges else 0
+        if not hasattr(self, "pledges"):
+            self.pledges = {}
+        self.pledges[p_key] = bigint(curr_p + int(str(pledge_val)))
+
+        # 3. Update pledgers list
+        curr_pledgers = str(self.grant_pledgers[grant_id]) if hasattr(self, "grant_pledgers") and grant_id in self.grant_pledgers else ""
+        plist = [p.strip().lower() for p in curr_pledgers.split(",") if p.strip()]
+        if sender not in plist:
+            plist.append(sender)
+            if not hasattr(self, "grant_pledgers"):
+                self.grant_pledgers = {}
+            self.grant_pledgers[grant_id] = ",".join(plist)
+
+        self._register_user(sender)
+        self._update_reputation(sender, 2) # Community co-funding incentive
+
+        return json.dumps({
+            "status": "PLEDGE_RECORDED",
+            "grant_id": grant_id,
+            "milestone_id": milestone_id,
+            "pledger": sender,
+            "pledged_amount": str(pledge_val),
+            "new_milestone_amount": str(ms.amount),
+            "new_grant_total": str(grant.total_amount)
+        })
+
+    @gl.public.write
+    def cancel_unstarted_grant(self, grant_id: str) -> str:
+        """Milestone v3 Capital Safety: Allows funder to cancel a grant if no milestone deliverables have commenced, refunding escrow proportionally."""
+        if grant_id not in self.grants:
+            raise UserError("Grant not found.")
+        grant = self.grants[grant_id]
+        if grant.status == "CLOSED":
+            raise UserError("Grant is already closed.")
+
+        sender = str(gl.message.sender_address).lower()
+        if sender != str(grant.funder).lower():
+            raise UserError("Only the grant funder can cancel the grant.")
+
+        total_ms = int(str(grant.num_milestones))
+        total_unstarted_amount = 0
+        for i in range(total_ms):
+            ms_key = self._milestone_key(grant_id, str(i))
+            if ms_key in self.milestones:
+                ms = self.milestones[ms_key]
+                if ms.status != "PENDING" or ms.attempts > bigint(0):
+                    raise UserError("Cannot cancel grant: at least one milestone has already started or been submitted.")
+                total_unstarted_amount += int(str(ms.amount))
+                ms.status = "CUT"
+                ms.reason = "Grant cancelled by funder before deliverables commenced. Escrow refunded."
+                self.milestones[ms_key] = ms
+
+        if total_unstarted_amount > 0:
+            first_ms = self.milestones[self._milestone_key(grant_id, "0")]
+            self._refund_milestone_escrow(grant_id, first_ms, grant, bigint(total_unstarted_amount))
+
+        grant.status = "CLOSED"
+        self.grants[grant_id] = grant
+        return "GRANT_CANCELLED"
+
+    @gl.public.view
+    def get_grant_pledges(self, grant_id: str) -> str:
+        """Milestone v3 Syndicate Inspector: Returns all co-funders and their contribution shares."""
+        if grant_id not in self.grants:
+            raise UserError("Grant not found.")
+        grant = self.grants[grant_id]
+
+        curr_pledgers = str(self.grant_pledgers[grant_id]) if hasattr(self, "grant_pledgers") and grant_id in self.grant_pledgers else ""
+        plist = [p.strip().lower() for p in curr_pledgers.split(",") if p.strip()]
+
+        total_pledged = 0
+        pledges_data = []
+        for p in plist:
+            amt = int(str(self.pledges[f"{grant_id}_{p}"])) if hasattr(self, "pledges") and f"{grant_id}_{p}" in self.pledges else 0
+            total_pledged += amt
+            pledges_data.append({"funder": p, "amount": str(amt)})
+
+        for item in pledges_data:
+            amt = int(item["amount"])
+            item["share_percent"] = round((amt / total_pledged * 100), 2) if total_pledged > 0 else 0
+
+        return json.dumps({
+            "grant_id": grant_id,
+            "total_amount": str(grant.total_amount),
+            "total_pledged": str(total_pledged),
+            "pledgers_count": len(pledges_data),
+            "pledges": pledges_data
+        })
 
     @gl.public.write
     def submit_evidence(self, grant_id: str, milestone_id: str, evidence_url: str, progress_report: str = "", evidence_hash: str = "") -> str:
@@ -411,12 +625,17 @@ class Contract(gl.Contract):
         payout_amount = bigint(0)
         now = self._get_current_timestamp()
 
-        # ⏳ 24H DISPUTE COOLING-OFF WINDOW ENFORCEMENT (Steward Standard)
+        grantee_score = int(str(self.reputations[str(grant.grantee).lower()])) if hasattr(self, "reputations") and str(grant.grantee).lower() in self.reputations else 0
+        is_fast_track = grantee_score >= 50
+        cooling_seconds = 43200 if is_fast_track else 86400
+        window_tag = "FAST-TRACK 12H DISPUTE WINDOW" if is_fast_track else "24H DISPUTE WINDOW"
+
+        # ⏳ DISPUTE COOLING-OFF WINDOW ENFORCEMENT (Steward Standard + Fast-Track)
         if verdict == "RELEASE":
             payout_amount = amount
             ms.status = "AWAITING_PAYOUT"
-            ms.payout_ready_at = now + bigint(86400)
-            ms.reason = f"⏳ [AWAITING PAYOUT - 24H DISPUTE WINDOW] AI Consensus approved 100% (Attempt {int(str(ms.attempts))}/3): {reason}"
+            ms.payout_ready_at = now + bigint(cooling_seconds)
+            ms.reason = f"⏳ [AWAITING PAYOUT - {window_tag}] AI Consensus approved 100% (Attempt {int(str(ms.attempts))}/3): {reason}"
         elif verdict == "PARTIAL":
             half = amount // bigint(2)
             payout_amount = half
@@ -427,10 +646,10 @@ class Contract(gl.Contract):
                 ms.disbursed_to_grantee = getattr(ms, "disbursed_to_grantee", bigint(0)) + unpaid_grantee
                 self._update_reputation(str(grant.grantee), 5)
 
-            # The remaining 50% liability is strictly RESERVED in escrow through the 24h dispute/appeal window
+            # The remaining 50% liability is strictly RESERVED in escrow through the dispute/appeal window
             ms.status = "AWAITING_PAYOUT"
-            ms.payout_ready_at = now + bigint(86400)
-            ms.reason = f"⏳ [PARTIAL RELEASED (50%) - REMAINING 50% RESERVED FOR 24H APPEAL WINDOW] (Attempt {int(str(ms.attempts))}/3): {reason}"
+            ms.payout_ready_at = now + bigint(cooling_seconds)
+            ms.reason = f"⏳ [PARTIAL RELEASED (50%) - REMAINING 50% RESERVED FOR {window_tag}] (Attempt {int(str(ms.attempts))}/3): {reason}"
         elif verdict == "RETRY":
             payout_amount = bigint(0)
             ms.status = "RETRY"
@@ -446,9 +665,9 @@ class Contract(gl.Contract):
                 ms.reason = f"🚫 [PERMANENTLY CLOSED - 3/3 Attempts Failed] {reason} | Remaining Escrow Refunded back to Funder."
                 rem_refund = ms.amount - getattr(ms, "disbursed_to_grantee", bigint(0)) - getattr(ms, "disbursed_to_funder", bigint(0))
                 if rem_refund > bigint(0):
-                    gl.get_contract_at(Address(str(grant.funder))).emit_transfer(value=u256(rem_refund))
-                    ms.disbursed_to_funder = getattr(ms, "disbursed_to_funder", bigint(0)) + rem_refund
+                    self._refund_milestone_escrow(grant_id, ms, grant, rem_refund)
                 self._update_reputation(str(grant.grantee), -15)
+                self._inc_stat("failed", str(grant.grantee))
         else:
             verdict = "ESCALATE"
             ms.status = "ESCALATED"
@@ -493,15 +712,15 @@ class Contract(gl.Contract):
                 ms.disbursed_to_grantee = getattr(ms, "disbursed_to_grantee", bigint(0)) + rem_to_grantee
             self._update_reputation(str(grant.grantee), 10)
             self._update_reputation(str(grant.funder), 5)
+            self._inc_stat("completed", str(grant.grantee))
         else:
             ms.status = "PARTIAL"
             ms.reason = f"⚠️ [PAYOUT FINALIZED (50%)] 24h cooling-off window cleared without dispute. Remaining 50% liability refunded to funder. {ms.reason}"
             # Undisputed 50% was already disbursed to grantee at partial adjudication.
-            # Now that the 24h window cleared without appeal, the remaining 50% liability is refunded to funder:
+            # Now that the dispute window cleared without appeal, the remaining 50% liability is refunded to funder(s):
             rem_to_funder = amount - getattr(ms, "disbursed_to_grantee", bigint(0)) - getattr(ms, "disbursed_to_funder", bigint(0))
             if rem_to_funder > bigint(0):
-                gl.get_contract_at(Address(str(grant.funder))).emit_transfer(value=u256(rem_to_funder))
-                ms.disbursed_to_funder = getattr(ms, "disbursed_to_funder", bigint(0)) + rem_to_funder
+                self._refund_milestone_escrow(grant_id, ms, grant, rem_to_funder)
             self._update_reputation(str(grant.funder), 5)
 
         self.milestones[ms_key] = ms
@@ -571,6 +790,7 @@ class Contract(gl.Contract):
                 gl.get_contract_at(Address(str(grant.grantee))).emit_transfer(value=u256(rem_to_grantee))
                 ms.disbursed_to_grantee = getattr(ms, "disbursed_to_grantee", bigint(0)) + rem_to_grantee
             self._update_reputation(str(grant.grantee), 10)
+            self._inc_stat("completed", str(grant.grantee))
         elif target_verdict == "PARTIAL":
             half = amount // bigint(2)
             rem_grantee = max(bigint(0), half - getattr(ms, "disbursed_to_grantee", bigint(0)))
@@ -581,17 +801,16 @@ class Contract(gl.Contract):
                 gl.get_contract_at(Address(str(grant.grantee))).emit_transfer(value=u256(rem_grantee))
                 ms.disbursed_to_grantee = getattr(ms, "disbursed_to_grantee", bigint(0)) + rem_grantee
             if rem_funder > bigint(0):
-                gl.get_contract_at(Address(str(grant.funder))).emit_transfer(value=u256(rem_funder))
-                ms.disbursed_to_funder = getattr(ms, "disbursed_to_funder", bigint(0)) + rem_funder
+                self._refund_milestone_escrow(grant_id, ms, grant, rem_funder)
             self._update_reputation(str(grant.grantee), 5)
         elif target_verdict == "CUT":
             ms.status = "CUT"
             ms.reason = f"🚫 [DAO ARBITRATION RESOLVED: CUT (REFUND)] {arbitration_reason}"
             rem_funder = amount - getattr(ms, "disbursed_to_grantee", bigint(0)) - getattr(ms, "disbursed_to_funder", bigint(0))
             if rem_funder > bigint(0):
-                gl.get_contract_at(Address(str(grant.funder))).emit_transfer(value=u256(rem_funder))
-                ms.disbursed_to_funder = getattr(ms, "disbursed_to_funder", bigint(0)) + rem_funder
+                self._refund_milestone_escrow(grant_id, ms, grant, rem_funder)
             self._update_reputation(str(grant.grantee), -15)
+            self._inc_stat("failed", str(grant.grantee))
 
         self.milestones[ms_key] = ms
         self._maybe_close_grant(grant_id, grant)
@@ -799,9 +1018,11 @@ class Contract(gl.Contract):
             if remaining_to_grantee > bigint(0):
                 gl.get_contract_at(Address(str(grant.grantee))).emit_transfer(value=u256(remaining_to_grantee))
                 ms.disbursed_to_grantee = getattr(ms, "disbursed_to_grantee", bigint(0)) + remaining_to_grantee
-            # 3. Boost reputation
+            # 3. Boost reputation and stats
             self._update_reputation(str(appeal.appellant), 15)
             self._update_reputation(str(grant.grantee), 10)
+            self._inc_stat("appeals_won", str(appeal.appellant))
+            self._inc_stat("completed", str(grant.grantee))
         else:
             appeal.status = "UPHELD"
             appeal.reason = f"⚖️ [APPEAL UPHELD (REJECTED)] Stake bond slashed. Reason: {app_reason}"
@@ -811,13 +1032,14 @@ class Contract(gl.Contract):
             # 1. Slash stake bond: transfer to counterparty
             slash_recipient = grant.funder if str(appeal.appellant).lower() == str(grant.grantee).lower() else grant.grantee
             gl.get_contract_at(Address(str(slash_recipient))).emit_transfer(value=u256(stake_amount))
-            # 2. Refund remaining undisbursed milestone escrow back to funder (NO DOUBLE REFUND)
+            # 2. Refund remaining undisbursed milestone escrow back to funder(s) (NO DOUBLE REFUND)
             remaining_to_funder = ms_amount - getattr(ms, "disbursed_to_grantee", bigint(0)) - getattr(ms, "disbursed_to_funder", bigint(0))
             if remaining_to_funder > bigint(0):
-                gl.get_contract_at(Address(str(grant.funder))).emit_transfer(value=u256(remaining_to_funder))
-                ms.disbursed_to_funder = getattr(ms, "disbursed_to_funder", bigint(0)) + remaining_to_funder
-            # 3. Slash reputation
+                self._refund_milestone_escrow(grant_id, ms, grant, remaining_to_funder)
+            # 3. Slash reputation and update stats
             self._update_reputation(str(appeal.appellant), -10)
+            self._inc_stat("appeals_lost", str(appeal.appellant))
+            self._inc_stat("failed", str(grant.grantee))
 
         self.appeals[ms_key] = appeal
         self.milestones[ms_key] = ms
@@ -853,6 +1075,56 @@ class Contract(gl.Contract):
             "tier": tier
         })
 
+    @gl.public.view
+    def get_reputation_profile(self, user_address: str) -> str:
+        """Milestone v3 Builder Dossier: Full performance metrics and trust tier analytics."""
+        addr = str(user_address).lower()
+        score = int(str(self.reputations[addr])) if hasattr(self, "reputations") and addr in self.reputations else 0
+        tier = self._get_reputation_tier(score)
+        completed = int(str(self.stats_completed[addr])) if hasattr(self, "stats_completed") and addr in self.stats_completed else 0
+        failed = int(str(self.stats_failed[addr])) if hasattr(self, "stats_failed") and addr in self.stats_failed else 0
+        app_won = int(str(self.stats_appeals_won[addr])) if hasattr(self, "stats_appeals_won") and addr in self.stats_appeals_won else 0
+        app_lost = int(str(self.stats_appeals_lost[addr])) if hasattr(self, "stats_appeals_lost") and addr in self.stats_appeals_lost else 0
+
+        total_audited = completed + failed
+        rel_index = round((completed / total_audited) * 100, 1) if total_audited > 0 else 100.0
+
+        return json.dumps({
+            "address": addr,
+            "score": score,
+            "tier": tier,
+            "fast_track_eligible": score >= 50,
+            "milestones_completed": completed,
+            "milestones_failed": failed,
+            "appeals_won": app_won,
+            "appeals_lost": app_lost,
+            "reliability_index": rel_index
+        })
+
+    @gl.public.view
+    def get_reputation_leaderboard(self) -> str:
+        """Milestone v3 Public Leaderboard: Ranked list of top verified builders and funders on-chain."""
+        curr = str(self.registered_users["all"]) if hasattr(self, "registered_users") and "all" in self.registered_users else ""
+        ulist = [u.strip().lower() for u in curr.split(",") if u.strip()]
+
+        profiles = []
+        for addr in ulist:
+            score = int(str(self.reputations[addr])) if hasattr(self, "reputations") and addr in self.reputations else 0
+            tier = self._get_reputation_tier(score)
+            completed = int(str(self.stats_completed[addr])) if hasattr(self, "stats_completed") and addr in self.stats_completed else 0
+            failed = int(str(self.stats_failed[addr])) if hasattr(self, "stats_failed") and addr in self.stats_failed else 0
+            profiles.append({
+                "address": addr,
+                "score": score,
+                "tier": tier,
+                "fast_track_eligible": score >= 50,
+                "milestones_completed": completed,
+                "milestones_failed": failed
+            })
+
+        profiles.sort(key=lambda x: x["score"], reverse=True)
+        return json.dumps(profiles[:20])
+
     def _parse_llm_json(self, text) -> dict:
         if isinstance(text, dict):
             return text
@@ -872,11 +1144,24 @@ class Contract(gl.Contract):
         if grant_id not in self.grants:
             raise UserError("Grant not found.")
         g = self.grants[grant_id]
-        
+
         funder_addr = str(g.funder).lower()
         grantee_addr = str(g.grantee).lower()
         funder_score = int(str(self.reputations[funder_addr])) if hasattr(self, "reputations") and funder_addr in self.reputations else 0
         grantee_score = int(str(self.reputations[grantee_addr])) if hasattr(self, "reputations") and grantee_addr in self.reputations else 0
+
+        # Syndicate pool info
+        pledgers_str = str(self.grant_pledgers[grant_id]) if hasattr(self, "grant_pledgers") and grant_id in self.grant_pledgers else ""
+        plist = [p.strip().lower() for p in pledgers_str.split(",") if p.strip()] if pledgers_str else []
+        total_syndicate = 0
+        for p in plist:
+            p_key = f"{grant_id}_{p}"
+            total_syndicate += int(str(self.pledges[p_key])) if hasattr(self, "pledges") and p_key in self.pledges else 0
+
+        syndicate_info = {
+            "total_pledged": str(total_syndicate) if total_syndicate > 0 else str(g.total_amount),
+            "pledgers_count": len(plist) if len(plist) > 0 else 1
+        }
 
         ms_list = []
         total_ms = int(str(g.num_milestones))
@@ -915,9 +1200,10 @@ class Contract(gl.Contract):
                     "disbursed_to_funder": str(disb_funder),
                     "remaining_liability": str(rem_liab),
                     "appeal_count": str(getattr(m, "appeal_count", 0)),
+                    "is_fast_track": grantee_score >= 50,
                     "appeal": appeal_data
                 })
-                
+
         res = {
             "id": g.id,
             "title": g.title,
@@ -927,12 +1213,13 @@ class Contract(gl.Contract):
             "total_amount": str(g.total_amount),
             "num_milestones": str(g.num_milestones),
             "status": g.status,
+            "syndicate_pool": syndicate_info,
             "funder_reputation": {"score": funder_score, "tier": self._get_reputation_tier(funder_score)},
             "grantee_reputation": {"score": grantee_score, "tier": self._get_reputation_tier(grantee_score)},
             "milestones": ms_list
         }
         return json.dumps(res)
-    
+
     @gl.public.view
     def get_all_grants(self) -> str:
         res = []
@@ -945,6 +1232,18 @@ class Contract(gl.Contract):
                 grantee_addr = str(g.grantee).lower()
                 funder_score = int(str(self.reputations[funder_addr])) if hasattr(self, "reputations") and funder_addr in self.reputations else 0
                 grantee_score = int(str(self.reputations[grantee_addr])) if hasattr(self, "reputations") and grantee_addr in self.reputations else 0
+
+                pledgers_str = str(self.grant_pledgers[gid]) if hasattr(self, "grant_pledgers") and gid in self.grant_pledgers else ""
+                plist = [p.strip().lower() for p in pledgers_str.split(",") if p.strip()] if pledgers_str else []
+                total_syndicate = 0
+                for p in plist:
+                    p_key = f"{gid}_{p}"
+                    total_syndicate += int(str(self.pledges[p_key])) if hasattr(self, "pledges") and p_key in self.pledges else 0
+
+                syndicate_info = {
+                    "total_pledged": str(total_syndicate) if total_syndicate > 0 else str(g.total_amount),
+                    "pledgers_count": len(plist) if len(plist) > 0 else 1
+                }
 
                 ms_list = []
                 total_ms = int(str(g.num_milestones))
@@ -982,6 +1281,7 @@ class Contract(gl.Contract):
                             "disbursed_to_funder": str(disb_funder),
                             "remaining_liability": str(rem_liab),
                             "appeal_count": str(getattr(m, "appeal_count", 0)),
+                            "is_fast_track": grantee_score >= 50,
                             "appeal": appeal_data
                         })
                 res.append({
@@ -993,6 +1293,7 @@ class Contract(gl.Contract):
                     "total_amount": str(g.total_amount),
                     "num_milestones": str(g.num_milestones),
                     "status": g.status,
+                    "syndicate_pool": syndicate_info,
                     "funder_reputation": {"score": funder_score, "tier": self._get_reputation_tier(funder_score)},
                     "grantee_reputation": {"score": grantee_score, "tier": self._get_reputation_tier(grantee_score)},
                     "milestones": ms_list

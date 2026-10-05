@@ -12,6 +12,33 @@ Grant programs often suffer from subjective milestone evaluations. GenLayer solv
 - **Studionet Address**: `0xc6123024C7E643e4DB233Ad578F9d68E1af1F486`
 - **Explorer Link**: [GenLayer Explorer](https://explorer-studio.genlayer.com/address/0xc6123024C7E643e4DB233Ad578F9d68E1af1F486)
 
+## 🚀 Milestone v3: Syndicate Co-Funding & Builder Trust Protocol
+
+GrantAuditor v3.0 expands beyond bilateral escrow into a decentralized **Grant Syndicate & On-Chain Builder Trust Network**:
+
+### 1. Syndicate Multi-Funder Escrow Pool (`pledge_grant`)
+- Anyone can co-fund active grants by pledging GEN tokens directly into milestone escrows.
+- **Proportional Solvency Clawback**: In the event of a milestone rejection/CUT or cancellation, remaining funds are returned proportionally across all co-funders based on their contribution ratios.
+- **Emergency Cancellation**: Funders can cancel unstarted grants and reclaim funds safely without lock-in.
+
+### 2. On-Chain Reputation & Dynamic Fast-Track Adjudication
+- Granular performance metrics tracked on-chain: completed milestones, rejection rate, appeals win/loss record.
+- **Four Trust Tiers**: Bronze Newcomer (<20), Silver Verified (20-49), Gold Established (50-99), Platinum Elite (100+).
+- **Fast-Track Settlement**: High-reputation builders (Gold/Platinum) unlock an accelerated **12-hour cooling-off dispute window (43,200s)**, while new builders maintain the standard 24 hours (86,400s).
+- **Public Leaderboard**: Query top verified builders and funders via `get_reputation_leaderboard()`.
+
+### 3. Automated Invariant & Security Verification Suite
+Total test suite contains **21 automated unit and regression tests** verifying:
+- Syndicate co-funding and proportional clawbacks.
+- Single-appeal enforcement and anti-double-disbursement guarantees.
+- Prompt injection canary token verification.
+- Mathematical solvency: $\sum \text{Disbursements} + \sum \text{Refunds} \le \text{Initial Deposit} + \sum \text{Pledges} + \sum \text{Stakes}$.
+
+To run all automated test suites:
+```bash
+pytest tests/
+```
+
 ## 🛡️ Core GenLayer Compliance & Audit Standards
 GrantAuditor has been engineered from the ground up to comply with rigorous GenLayer audit and judging standards:
 

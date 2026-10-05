@@ -68,6 +68,20 @@ interface Reputation {
   tier: string;
 }
 
+interface SyndicatePool {
+  total_pledged: string;
+  pledgers_count: number;
+}
+
+interface LeaderboardUser {
+  address: string;
+  score: number;
+  tier: string;
+  fast_track_eligible: boolean;
+  milestones_completed: number;
+  milestones_failed: number;
+}
+
 interface Milestone {
   id: number;
   title: string;
@@ -90,6 +104,7 @@ interface Milestone {
   disbursedToFunder?: number;
   remainingLiability?: number;
   appealCount?: number;
+  isFastTrack?: boolean;
 }
 
 interface Grant {
@@ -105,6 +120,7 @@ interface Grant {
   createdAt: string;
   funderReputation?: Reputation;
   granteeReputation?: Reputation;
+  syndicatePool?: SyndicatePool;
   milestones: Milestone[];
 }
 
@@ -250,6 +266,16 @@ export function App() {
   const [adjudicatingAppealKey, setAdjudicatingAppealKey] = useState<string | null>(null);
   const [activeAppealModalKey, setActiveAppealModalKey] = useState<string | null>(null);
 
+  // Milestone v3 Syndicate Co-Funding & Leaderboard State
+  const [isSyndicateModalOpen, setIsSyndicateModalOpen] = useState<string | null>(null);
+  const [pledgeAmountInput, setPledgeAmountInput] = useState<string>("5");
+  const [pledgeMilestoneInput, setPledgeMilestoneInput] = useState<string>("0");
+  const [isPledging, setIsPledging] = useState<boolean>(false);
+  const [isLeaderboardOpen, setIsLeaderboardOpen] = useState<boolean>(false);
+  const [leaderboardData, setLeaderboardData] = useState<LeaderboardUser[]>([]);
+  const [isLoadingLeaderboard, setIsLoadingLeaderboard] = useState<boolean>(false);
+  const [cancellingGrantId, setCancellingGrantId] = useState<string | null>(null);
+
   const addLog = (message: string, type: LogEntry['type'] = 'INFO', txHash?: string) => {
     const time = new Date().toTimeString().split(' ')[0] + '.' + new Date().getMilliseconds().toString().padStart(3, '0');
     setLogs(prev => [{
@@ -321,6 +347,10 @@ export function App() {
             totalAmount: totalAmt,
             isSettled: c.status === "CLOSED",
             createdAt: "Synced from GenLayer",
+            syndicatePool: c.syndicate_pool ? {
+              total_pledged: String(Number(BigInt(c.syndicate_pool.total_pledged || 0) / WEI_MULTIPLIER)),
+              pledgers_count: Number(c.syndicate_pool.pledgers_count || 1)
+            } : undefined,
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             milestones: c.milestones.map((m: any) => {
               const msAmt = Number(BigInt(m.amount) / WEI_MULTIPLIER);
@@ -366,7 +396,8 @@ export function App() {
                 disbursedToGrantee: disbGrantee,
                 disbursedToFunder: disbFunder,
                 remainingLiability: remLiab,
-                appealCount: appealCount
+                appealCount: appealCount,
+                isFastTrack: Boolean(m.is_fast_track)
               };
             })
           };
@@ -1379,6 +1410,116 @@ export function App() {
     }
   };
 
+  // Milestone v3 Syndicate Co-Funding & Leaderboard Actions
+  const fetchLeaderboard = async () => {
+    setIsLoadingLeaderboard(true);
+    try {
+      const client = getGenLayerClient();
+      const rawJson = await client.readContract({
+        address: CONTRACT_ADDRESS as `0x${string}`,
+        functionName: 'get_reputation_leaderboard',
+        args: []
+      });
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
+      const data = JSON.parse(rawJson);
+      setLeaderboardData(data);
+    } catch (e: unknown) {
+      console.error("Failed to load leaderboard:", e);
+    } finally {
+      setIsLoadingLeaderboard(false);
+    }
+  };
+
+  const handlePledgeFunds = async (grant: Grant, milestoneIndex: string, amountGen: number) => {
+    if (!account) {
+      alert("Please connect your wallet first.");
+      return;
+    }
+    if (amountGen <= 0) {
+      alert("Pledge amount must be greater than 0 GEN.");
+      return;
+    }
+    setIsPledging(true);
+    try {
+      const client = getGenLayerClient();
+      const onChainId = grant.onChainId || "1";
+      addLog(`Initiating Syndicate Co-Funding pledge of ${amountGen} GEN to Grant #${onChainId}...`, 'TX');
+
+      const valWei = parseEther(amountGen.toString());
+      const txHash = await client.writeContract({
+        address: CONTRACT_ADDRESS as `0x${string}`,
+        functionName: 'pledge_grant',
+        args: [onChainId, milestoneIndex],
+        value: valWei
+      });
+      addLog(`Syndicate Co-Funding pledge transaction submitted: ${txHash}`, 'SUCCESS', txHash);
+      setIsSyndicateModalOpen(null);
+      setGrants(prev => prev.map(g => {
+        if (g.grantId !== grant.grantId) return g;
+        const currentTotal = g.totalAmount + amountGen;
+        const msIdx = Number(milestoneIndex);
+        const updatedMs = g.milestones.map((m, idx) => {
+          if (idx !== msIdx) return m;
+          return { ...m, amount: m.amount + amountGen };
+        });
+        const prevCount = g.syndicatePool?.pledgers_count ?? 1;
+        return {
+          ...g,
+          totalAmount: currentTotal,
+          milestones: updatedMs,
+          syndicatePool: {
+            total_pledged: String(currentTotal),
+            pledgers_count: prevCount + 1
+          }
+        };
+      }));
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      setRpcError(`Syndicate Pledge Error:\n\n${errMsg}`);
+      addLog(`Syndicate pledge failed: ${errMsg}`, 'ERROR');
+    } finally {
+      setIsPledging(false);
+    }
+  };
+
+  const handleCancelUnstartedGrant = async (grant: Grant) => {
+    if (!account) {
+      alert("Please connect your wallet first.");
+      return;
+    }
+    const onChainId = grant.onChainId || "1";
+    if (!confirm(`Are you sure you want to cancel Grant #${onChainId} and execute proportional escrow refunds to all pledgers?`)) {
+      return;
+    }
+    setCancellingGrantId(grant.grantId);
+    try {
+      const client = getGenLayerClient();
+      addLog(`Cancelling unstarted Grant #${onChainId} and refunding pool deposits...`, 'TX');
+      const txHash = await client.writeContract({
+        address: CONTRACT_ADDRESS as `0x${string}`,
+        functionName: 'cancel_unstarted_grant',
+        args: [onChainId],
+        value: 0n
+      });
+      addLog(`Grant #${onChainId} cancelled successfully: ${txHash}`, 'SUCCESS', txHash);
+      setGrants(prev => prev.map(g => {
+        if (g.grantId !== grant.grantId) return g;
+        return {
+          ...g,
+          isSettled: true,
+          milestones: g.milestones.map(m => ({ ...m, status: 'CUT' as const }))
+        };
+      }));
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      setRpcError(`Grant Cancellation Error:\n\n${errMsg}`);
+      addLog(`Cancellation failed: ${errMsg}`, 'ERROR');
+    } finally {
+      setCancellingGrantId(null);
+    }
+  };
+
   // Bot Chat Logic
   const handleSendBotMessage = (textToSend?: string) => {
     const query = (textToSend || chatInput).trim();
@@ -1462,7 +1603,7 @@ export function App() {
               <div className="flex items-center space-x-2.5">
                 <span className="text-base font-black tracking-tight text-white font-mono uppercase">GrantAuditor</span>
                 <span className="px-2 py-0.5 text-[10px] font-mono font-extrabold tracking-wider uppercase bg-cyan-500/15 text-cyan-300 border border-cyan-500/40 rounded-md shadow-inner">
-                  4-Outcome Nondet v2
+                  v3.0 Syndicate & Trust
                 </span>
               </div>
             </div>
@@ -1491,6 +1632,17 @@ export function App() {
         </div>
 
         <div className="flex items-center space-x-3 text-xs font-medium relative">
+          <button
+            onClick={() => {
+              fetchLeaderboard();
+              setIsLeaderboardOpen(true);
+            }}
+            className="flex items-center space-x-2 px-3.5 py-2 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/40 text-amber-300 font-mono transition-colors cursor-pointer"
+          >
+            <Award className="w-4 h-4 text-amber-400" />
+            <span className="hidden sm:inline">Leaderboard & Tiers</span>
+          </button>
+
           <button
             onClick={() => setIsHowItWorksOpen(!isHowItWorksOpen)}
             className="hidden md:flex items-center space-x-2 px-4 py-2 rounded-xl bg-zinc-900/90 hover:bg-zinc-800 border border-zinc-700 text-zinc-300 font-mono transition-colors cursor-pointer"
@@ -1879,11 +2031,31 @@ export function App() {
                 </div>
 
                 <div className="text-left xl:text-right flex-shrink-0 bg-[#0c101a] p-5 rounded-2xl border border-cyan-500/30 shadow-2xl min-w-[280px]">
-                  <span className="text-xs uppercase font-mono font-bold text-zinc-400 block">Total Escrow Vault</span>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs uppercase font-mono font-bold text-zinc-400">Total Escrow Vault</span>
+                    <span className="text-[10px] px-2 py-0.5 rounded bg-cyan-950/80 border border-cyan-500/50 text-cyan-300 font-mono font-bold">
+                      {activeGrant.syndicatePool ? `${activeGrant.syndicatePool.pledgers_count} Co-Funders` : "Single Funder"}
+                    </span>
+                  </div>
                   <span className="text-3xl xl:text-4xl font-black font-mono text-white tracking-tight block my-1">{activeGrant.totalAmount.toLocaleString()} <span className="text-cyan-400 text-2xl">GEN</span></span>
-                  <span className="text-xs text-emerald-400 font-mono flex items-center xl:justify-end mt-1 font-bold">
-                    <CheckCircle2 className="w-3.5 h-3.5 mr-1 text-emerald-400" /> Real On-Chain GEN Collateral
-                  </span>
+                  <div className="flex items-center justify-between gap-2 mt-2">
+                    <button
+                      onClick={() => setIsSyndicateModalOpen(activeGrant.grantId)}
+                      className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-cyan-500 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 text-black font-mono font-bold text-xs flex items-center shadow-md cursor-pointer transition-transform hover:scale-105"
+                    >
+                      <Plus className="w-3.5 h-3.5 mr-1" /> Co-Fund Pool
+                    </button>
+                    {activeGrant.milestones.every(m => m.status === 'PENDING' && (m.attempts || 0) === 0) && (
+                      <button
+                        onClick={() => handleCancelUnstartedGrant(activeGrant)}
+                        disabled={cancellingGrantId === activeGrant.grantId}
+                        className="px-2.5 py-1.5 rounded-lg bg-rose-950/80 hover:bg-rose-900 border border-rose-700/80 text-rose-300 font-mono text-[11px] font-bold flex items-center cursor-pointer transition-colors"
+                      >
+                        {cancellingGrantId === activeGrant.grantId ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <XCircle className="w-3 h-3 mr-1" />}
+                        Cancel & Refund
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -2028,7 +2200,8 @@ export function App() {
                           )}
                           {ms.status === 'AWAITING_PAYOUT' && (
                             <span className="px-4 py-2 rounded-xl text-xs font-mono font-extrabold uppercase bg-amber-500/25 text-amber-300 border border-amber-500/70 flex items-center shadow-md animate-pulse">
-                              <Clock className="w-4 h-4 mr-1.5 text-amber-400" /> ⏳ AWAITING PAYOUT (24H DISPUTE WINDOW)
+                              <Clock className="w-4 h-4 mr-1.5 text-amber-400" />
+                              {ms.isFastTrack ? "⚡ AWAITING PAYOUT (FAST-TRACK 12H)" : "⏳ AWAITING PAYOUT (24H DISPUTE WINDOW)"}
                             </span>
                           )}
                           {ms.status === 'SUBMITTED' && !isCurrentlyJudging && (
@@ -3104,6 +3277,207 @@ export function App() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Milestone v3 Syndicate Co-Funding Modal */}
+      {isSyndicateModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 animate-fadeIn">
+          <div className="workbench-card max-w-lg w-full p-6 sm:p-8 space-y-6 text-left border border-cyan-500/60 shadow-2xl relative bg-[#0a0e18]">
+            <div className="flex items-center justify-between border-b border-zinc-800 pb-4 font-mono">
+              <div className="flex items-center space-x-2.5">
+                <div className="p-2 rounded-lg bg-cyan-950/80 border border-cyan-500/50">
+                  <Plus className="w-5 h-5 text-cyan-400" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-white uppercase tracking-wider">Syndicate Co-Funding</h3>
+                  <p className="text-[11px] text-zinc-400">Pledge GEN to boost milestone escrow pool</p>
+                </div>
+              </div>
+              <button onClick={() => setIsSyndicateModalOpen(null)} className="text-zinc-400 hover:text-white text-lg font-bold px-2 cursor-pointer">
+                ✕
+              </button>
+            </div>
+
+            <div className="p-4 rounded-xl bg-[#0e1424] border border-zinc-800 space-y-2 text-xs font-mono">
+              <div className="flex justify-between text-zinc-300">
+                <span>Target Grant:</span>
+                <span className="font-bold text-cyan-400">{isSyndicateModalOpen}</span>
+              </div>
+              <div className="flex justify-between text-zinc-300">
+                <span>Solvency Guarantee:</span>
+                <span className="text-emerald-400 font-bold">100% Proportional Clawback</span>
+              </div>
+              <p className="text-[11px] text-zinc-400 font-sans pt-1 border-t border-zinc-800">
+                If the milestone is rejected or cancelled, your pledged GEN is refunded proportionally based on your pool contribution percentage.
+              </p>
+            </div>
+
+            <div className="space-y-4 font-mono text-xs">
+              <div>
+                <label className="block font-bold text-zinc-300 mb-1.5 uppercase">SELECT MILESTONE TRANCHE</label>
+                <select
+                  value={pledgeMilestoneInput}
+                  onChange={(e) => setPledgeMilestoneInput(e.target.value)}
+                  className="w-full bg-[#111522] border border-zinc-700 rounded-xl px-3.5 py-2.5 text-white focus:outline-none focus:border-cyan-400 text-sm"
+                >
+                  {(() => {
+                    const g = grants.find(item => item.grantId === isSyndicateModalOpen);
+                    return (g?.milestones || []).map((ms, idx) => (
+                      <option key={idx} value={String(idx)}>
+                        Milestone #{ms.id} — {ms.title} ({ms.amount} GEN)
+                      </option>
+                    ));
+                  })()}
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-bold text-cyan-300 mb-1.5 uppercase">PLEDGE AMOUNT (GEN)</label>
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={pledgeAmountInput}
+                  onChange={(e) => setPledgeAmountInput(e.target.value)}
+                  className="w-full bg-[#111522] border border-cyan-500/50 rounded-xl px-3.5 py-2.5 text-white font-bold text-base focus:outline-none focus:border-cyan-300 shadow-inner"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end space-x-3 pt-4 border-t border-zinc-800 font-mono text-xs">
+              <button
+                type="button"
+                onClick={() => setIsSyndicateModalOpen(null)}
+                className="px-4 py-2.5 text-zinc-400 hover:text-white transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isPledging}
+                onClick={() => {
+                  const g = grants.find(item => item.grantId === isSyndicateModalOpen);
+                  if (g) {
+                    handlePledgeFunds(g, pledgeMilestoneInput, Number(pledgeAmountInput) || 1);
+                  }
+                }}
+                className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-cyan-400 to-indigo-600 hover:from-cyan-300 hover:to-indigo-500 text-black font-black uppercase tracking-wider flex items-center space-x-2 cursor-pointer shadow-lg transition-transform hover:scale-105"
+              >
+                {isPledging ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Confirming...</span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-4 h-4" />
+                    <span>Confirm Syndicate Pledge</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Milestone v3 On-Chain Leaderboard & Trust Tiers Modal */}
+      {isLeaderboardOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 animate-fadeIn">
+          <div className="workbench-card max-w-2xl w-full p-6 sm:p-8 space-y-6 text-left border border-amber-500/50 shadow-2xl relative bg-[#0a0e18]">
+            <div className="flex items-center justify-between border-b border-zinc-800 pb-4 font-mono">
+              <div className="flex items-center space-x-2.5">
+                <div className="p-2 rounded-lg bg-amber-950/80 border border-amber-500/50">
+                  <Award className="w-5 h-5 text-amber-400" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-white uppercase tracking-wider">Builder Trust Registry & Leaderboard</h3>
+                  <p className="text-[11px] text-zinc-400">Verifiable On-Chain Reputation & Tier Privileges</p>
+                </div>
+              </div>
+              <button onClick={() => setIsLeaderboardOpen(false)} className="text-zinc-400 hover:text-white text-lg font-bold px-2 cursor-pointer">
+                ✕
+              </button>
+            </div>
+
+            {/* Trust Tier Perks Infobox */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center text-xs font-mono">
+              <div className="p-2.5 rounded-xl bg-zinc-900 border border-zinc-800">
+                <div className="text-[10px] text-zinc-400 font-bold">BRONZE</div>
+                <div className="text-white font-extrabold mt-0.5">&lt; 20 pts</div>
+                <div className="text-[9px] text-zinc-500 mt-0.5">24h Dispute</div>
+              </div>
+              <div className="p-2.5 rounded-xl bg-cyan-950/40 border border-cyan-800/40">
+                <div className="text-[10px] text-cyan-300 font-bold">SILVER</div>
+                <div className="text-cyan-200 font-extrabold mt-0.5">20 - 49 pts</div>
+                <div className="text-[9px] text-cyan-400/70 mt-0.5">Verified Badge</div>
+              </div>
+              <div className="p-2.5 rounded-xl bg-amber-950/40 border border-amber-600/40">
+                <div className="text-[10px] text-amber-300 font-bold">GOLD</div>
+                <div className="text-amber-200 font-extrabold mt-0.5">50 - 99 pts</div>
+                <div className="text-[9px] text-amber-400 font-bold mt-0.5">⚡ 12h Fast-Track</div>
+              </div>
+              <div className="p-2.5 rounded-xl bg-purple-950/40 border border-purple-600/40">
+                <div className="text-[10px] text-purple-300 font-bold">PLATINUM</div>
+                <div className="text-purple-200 font-extrabold mt-0.5">100+ pts</div>
+                <div className="text-[9px] text-purple-400 font-bold mt-0.5">⚡ 12h Fast-Track</div>
+              </div>
+            </div>
+
+            {/* Leaderboard Table */}
+            <div className="space-y-2 max-h-[360px] overflow-y-auto pr-1">
+              {isLoadingLeaderboard ? (
+                <div className="py-12 flex flex-col items-center justify-center text-zinc-400 font-mono text-xs">
+                  <Loader2 className="w-6 h-6 animate-spin text-amber-400 mb-2" />
+                  <span>Querying On-Chain Trust Registry...</span>
+                </div>
+              ) : leaderboardData.length === 0 ? (
+                <div className="py-12 text-center text-zinc-500 font-mono text-xs">
+                  No registered builder scores yet. Scores update autonomously upon milestone completion.
+                </div>
+              ) : (
+                leaderboardData.map((user, idx) => (
+                  <div
+                    key={idx}
+                    className="p-3.5 rounded-xl bg-zinc-900/70 border border-zinc-800 flex items-center justify-between text-xs font-mono"
+                  >
+                    <div className="flex items-center space-x-3">
+                      <span className={`w-6 text-center font-black ${idx === 0 ? "text-amber-400 text-sm" : idx === 1 ? "text-zinc-300" : idx === 2 ? "text-amber-600" : "text-zinc-500"}`}>
+                        #{idx + 1}
+                      </span>
+                      <div>
+                        <div className="font-bold text-white flex items-center space-x-2">
+                          <span>{user.address.slice(0, 8)}...{user.address.slice(-6)}</span>
+                          {user.fast_track_eligible && (
+                            <span className="px-1.5 py-0.2 rounded bg-amber-950/80 border border-amber-500/60 text-amber-300 text-[9px] font-black">
+                              ⚡ FAST-TRACK
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[11px] text-zinc-400 font-sans mt-0.5">
+                          {user.milestones_completed} completed • {user.milestones_failed} rejected
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="text-right">
+                      <div className="font-black text-amber-400 text-sm">{user.score} pts</div>
+                      <div className="text-[10px] text-zinc-400">{user.tier}</div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="flex justify-end pt-3 border-t border-zinc-800">
+              <button
+                onClick={() => setIsLeaderboardOpen(false)}
+                className="px-5 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-white font-mono text-xs font-bold transition-colors cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
           </div>
         </div>
       )}
