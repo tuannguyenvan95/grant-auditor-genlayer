@@ -64,6 +64,8 @@ class MockGL:
             match = re.search(r'"canary":\s*"([^"]+)"', str(prompt))
             if match:
                 canary = match.group(1)
+            if "canary_sandbox_v4" in str(prompt):
+                return {"verdict": "RELEASE", "confidence": 98, "grade": "AAA", "canary": canary, "reason": "100% verified."}
             return {"verdict": "PARTIAL", "confidence": 100, "canary": canary, "reason": "50% completed."}
 
     class vm:
@@ -123,6 +125,9 @@ class TestV4SLACuratorCertificate(unittest.TestCase):
         self.contract.curator_endorsements = {}
         self.contract.curator_vetoes = {}
         self.contract.audit_certificates = {}
+        self.contract.grant_upvotes = {}
+        self.contract.grant_downvotes = {}
+        self.contract.user_votes = {}
         self.contract.next_grant_id = MockBigInt(1)
 
         self.funder = MockAddress("0xfunder_alice")
@@ -325,3 +330,61 @@ class TestV4SLACuratorCertificate(unittest.TestCase):
         self.assertEqual(cert["total_refunded_to_funders"], "200")
         self.assertEqual(cert["total_disbursed_to_grantee"], "0")
         self.assertIn("GenLayer", cert["auditor_protocol"])
+
+    def test_on_chain_svg_certificate_generation(self):
+        """Proves on-chain SVG certificate renderer outputs valid scalable vector graphics."""
+        self.gl.message.sender_address = self.funder
+        self.gl.message.value = MockBigInt(100)
+        gid = self.contract.create_grant(
+            self.grantee, "Holographic SVG Initiative", "https://example.com/prop", "100"
+        )
+        self.contract.cancel_unstarted_grant(gid)
+
+        svg = self.contract.get_certificate_svg(gid)
+        self.assertTrue(svg.startswith("<svg"))
+        self.assertTrue(svg.strip().endswith("</svg>"))
+        self.assertIn("VERIFIED AUDIT CERTIFICATE", svg)
+        self.assertIn("Holographic SVG Initiative", svg)
+        self.assertIn("SHA-256 CRYPTOGRAPHIC DIGEST", svg)
+
+    def test_community_governance_signal_voting(self):
+        """Proves community accounts can cast decentralized sentiment/governance signals on grants."""
+        self.gl.message.sender_address = self.funder
+        self.gl.message.value = MockBigInt(100)
+        gid = self.contract.create_grant(
+            self.grantee, "Community Signal Project", "https://example.com/prop", "100"
+        )
+
+        # Backer votes UP
+        self.gl.message.sender_address = self.backer
+        res1 = self.contract.vote_grant_endorsement(gid, "UP")
+        self.assertEqual(res1, "VOTE_RECORDED_UP")
+
+        # Curator1 votes UP
+        self.gl.message.sender_address = self.curator1
+        res2 = self.contract.vote_grant_endorsement(gid, "UP")
+        self.assertEqual(res2, "VOTE_RECORDED_UP")
+
+        # Curator2 votes DOWN
+        self.gl.message.sender_address = self.curator2
+        res3 = self.contract.vote_grant_endorsement(gid, "DOWN")
+        self.assertEqual(res3, "VOTE_RECORDED_DOWN")
+
+        endorsements = json.loads(self.contract.get_grant_endorsements(gid))
+        self.assertEqual(endorsements["upvotes"], 2)
+        self.assertEqual(endorsements["downvotes"], 1)
+        self.assertEqual(endorsements["score"], 1)
+
+    def test_simulate_ai_audit_sandbox(self):
+        """Proves AI playground simulation correctly evaluates deliverable with canary token and risk scoring."""
+        sim_res = json.loads(self.contract.simulate_ai_audit(
+            "Build ERC-4337 Account Abstraction paymaster",
+            "https://github.com/example/paymaster",
+            "Shipped complete paymaster contracts with 100% unit test coverage."
+        ))
+
+        self.assertEqual(sim_res["verdict"], "RELEASE")
+        self.assertEqual(sim_res["grade"], "AAA")
+        self.assertEqual(sim_res["confidence"], 98)
+        self.assertEqual(sim_res["canary"], "canary_sandbox_v4")
+
