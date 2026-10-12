@@ -9,12 +9,31 @@ Grant programs often suffer from subjective milestone evaluations. GenLayer solv
 - **Confirmed URL**: [https://grant-auditor-genlayer-xi.vercel.app](https://grant-auditor-genlayer-xi.vercel.app)
 
 ## Deployed Contract
-- **Studionet Address**: `0x8B2d38D4f15b49CaA7DcC6b0055d2FE6F0f81756`
-- **Explorer Link**: [GenLayer Explorer](https://explorer-studio.genlayer.com/address/0x8B2d38D4f15b49CaA7DcC6b0055d2FE6F0f81756)
+- **Studionet Address**: `0xb70edE8901e3620f2C5E3729Ab39fC37A73D1E2f`
+- **Explorer Link**: [GenLayer Explorer](https://explorer-studio.genlayer.com/address/0xb70edE8901e3620f2C5E3729Ab39fC37A73D1E2f)
 
-## 🚀 Milestone v3: Syndicate Co-Funding & Builder Trust Protocol
+## 🚀 Milestone v4.0 Ultimate: Autonomous AI Oracle Playground & On-Chain Holographic SVG Certificates
 
-GrantAuditor v3.0 expands beyond bilateral escrow into a decentralized **Grant Syndicate & On-Chain Builder Trust Network**:
+GrantAuditor v4.0 Ultimate elevates decentralized grant auditing into an enterprise-grade autonomous operating system:
+
+### 1. Interactive AI Oracle Playground (Judge Sandbox)
+- Evaluators can test GenLayer subjective consensus in real time with 1-click test vector benchmarks.
+- **Canary Token Defense**: Cryptographic guardrails prevent adversarial prompt injection exploits.
+- **Multi-Vector Scoring**: Real-time evaluation of Deliverable Completeness (0-100), Code Quality & Authenticity (0-100), and Risk/Fraud Index.
+
+### 2. On-Chain Holographic SVG Certificates
+- Pure vector certificates rendered directly from GenVM memory on-chain via `get_certificate_svg(grant_id)`.
+- Features tamper-proof SHA-256 cryptographic provenance digests and builder trust tiers.
+
+### 3. SLA Deadlines & Expired Escrow Clawback
+- Unresponsive or abandoned builder milestones expire on-chain, entitling funders and syndicate pledgers to execute an immediate 100% clawback of unreleased escrow.
+- Grantees can request formal extensions subject to on-chain funder approval.
+
+### 4. Institutional Curator Council Governance
+- Multi-member domain expert curator council with quorum thresholds to accelerate milestone releases and emergency veto powers to freeze suspicious deliverables into ESCALATED mode.
+
+### 5. Community Signal Governance
+- Decentralized sentiment signals (upvotes/downvotes) anchored to Studionet state.
 
 ### 1. Syndicate Multi-Funder Escrow Pool (`pledge_grant`)
 - Anyone can co-fund active grants by pledging GEN tokens directly into milestone escrows.
@@ -75,7 +94,7 @@ node tests/test_payment_regression.mjs
 1. Open `.env` in the `frontend/` directory.
 2. Add your deployed Contract Address:
    ```env
-   VITE_CONTRACT_ADDRESS=0x8B2d38D4f15b49CaA7DcC6b0055d2FE6F0f81756
+   VITE_CONTRACT_ADDRESS=0xb70edE8901e3620f2C5E3729Ab39fC37A73D1E2f
    ```
 3. Run the development server or build for production:
    ```bash
