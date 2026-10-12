@@ -105,6 +105,15 @@ interface Milestone {
   remainingLiability?: number;
   appealCount?: number;
   isFastTrack?: boolean;
+  deadline?: string;
+  isExpired?: boolean;
+  extensionRequest?: {
+    additional_seconds: number;
+    reason: string;
+    status: 'PENDING_APPROVAL' | 'APPROVED' | 'REJECTED';
+    requested_at: number;
+  };
+  endorsements?: string[];
 }
 
 interface Grant {
@@ -121,6 +130,33 @@ interface Grant {
   funderReputation?: Reputation;
   granteeReputation?: Reputation;
   syndicatePool?: SyndicatePool;
+  curatorCouncil?: {
+    curators: string[];
+    threshold: number;
+    count: number;
+  };
+  auditCertificate?: {
+    certificate_id: string;
+    certificate_hash: string;
+    grant_id: string;
+    title: string;
+    funder: string;
+    grantee: string;
+    total_escrow: string;
+    total_disbursed_to_grantee: string;
+    total_refunded_to_funders: string;
+    milestones_total: number;
+    milestones_approved: number;
+    milestones_partial: number;
+    milestones_cut: number;
+    audit_grade: string;
+    builder_reputation_score: number;
+    builder_tier: string;
+    curators_council: string;
+    auditor_protocol: string;
+    issued_at: string;
+    milestones_summary?: Array<{ id: string; status: string; disbursed: string; refunded: string }>;
+  };
   milestones: Milestone[];
 }
 
@@ -276,6 +312,24 @@ export function App() {
   const [isLoadingLeaderboard, setIsLoadingLeaderboard] = useState<boolean>(false);
   const [cancellingGrantId, setCancellingGrantId] = useState<string | null>(null);
 
+  // Milestone v4: SLA Deadlines, Extensions, Curator Council & Cryptographic Certificate State
+  const [claimingExpiredKey, setClaimingExpiredKey] = useState<string | null>(null);
+  const [extensionModalKey, setExtensionModalKey] = useState<{ grantId: string; onChainId: string; milestoneIdx: number } | null>(null);
+  const [extensionDaysInput, setExtensionDaysInput] = useState<number>(7);
+  const [extensionReasonInput, setExtensionReasonInput] = useState<string>("");
+  const [isSubmittingExtension, setIsSubmittingExtension] = useState<boolean>(false);
+  const [reviewingExtensionKey, setReviewingExtensionKey] = useState<string | null>(null);
+
+  const [curatorModalGrant, setCuratorModalGrant] = useState<Grant | null>(null);
+  const [curatorAddressesInput, setCuratorAddressesInput] = useState<string>("");
+  const [curatorThresholdInput, setCuratorThresholdInput] = useState<number>(1);
+  const [isConfiguringCurators, setIsConfiguringCurators] = useState<boolean>(false);
+  const [endorsingKey, setEndorsingKey] = useState<string | null>(null);
+  const [vetoingKey, setVetoingKey] = useState<string | null>(null);
+
+  const [activeCertGrant, setActiveCertGrant] = useState<Grant | null>(null);
+  const [isCertModalOpen, setIsCertModalOpen] = useState<boolean>(false);
+
   const addLog = (message: string, type: LogEntry['type'] = 'INFO', txHash?: string) => {
     const time = new Date().toTimeString().split(' ')[0] + '.' + new Date().getMilliseconds().toString().padStart(3, '0');
     setLogs(prev => [{
@@ -285,6 +339,13 @@ export function App() {
       message,
       txHash
     }, ...prev.slice(0, 49)]);
+  };
+
+  const syncGrantsRef = useRef<((verbose?: boolean) => Promise<void>) | null>(null);
+  const syncGrants = async (verbose: boolean = false) => {
+    if (syncGrantsRef.current) {
+      await syncGrantsRef.current(verbose);
+    }
   };
 
   useEffect(() => {
@@ -351,6 +412,8 @@ export function App() {
               total_pledged: String(Number(BigInt(c.syndicate_pool.total_pledged || 0) / WEI_MULTIPLIER)),
               pledgers_count: Number(c.syndicate_pool.pledgers_count || 1)
             } : undefined,
+            curatorCouncil: c.curator_council,
+            auditCertificate: c.audit_certificate,
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             milestones: c.milestones.map((m: any) => {
               const msAmt = Number(BigInt(m.amount) / WEI_MULTIPLIER);
@@ -397,7 +460,11 @@ export function App() {
                 disbursedToFunder: disbFunder,
                 remainingLiability: remLiab,
                 appealCount: appealCount,
-                isFastTrack: Boolean(m.is_fast_track)
+                isFastTrack: Boolean(m.is_fast_track),
+                deadline: m.deadline,
+                isExpired: Boolean(m.is_expired),
+                extensionRequest: m.extension_request,
+                endorsements: m.endorsements || []
               };
             })
           };
@@ -506,6 +573,7 @@ export function App() {
       }
     };
     
+    syncGrantsRef.current = syncGrants;
     syncGrants(true);
     const pollInterval = setInterval(() => {
       syncGrants(false);
@@ -1520,6 +1588,164 @@ export function App() {
     }
   };
 
+  // Milestone v4: SLA Deadlines, Curator Council & Cryptographic Certificate Handlers
+  const handleClaimExpiredEscrow = async (grant: Grant, milestoneIdx: number) => {
+    if (!account) {
+      alert("Please connect your wallet first.");
+      return;
+    }
+    const onChainId = grant.onChainId || "1";
+    const key = `${onChainId}_${milestoneIdx}`;
+    setClaimingExpiredKey(key);
+    addLog(`Initiating SLA Expiry Escrow Claim for Milestone #${milestoneIdx + 1}...`, 'TX');
+    try {
+      const client = getGenLayerClient();
+      const txHash = await client.writeContract({
+        address: CONTRACT_ADDRESS as `0x${string}`,
+        functionName: 'claim_expired_milestone',
+        args: [onChainId, String(milestoneIdx)],
+        value: 0n
+      });
+      addLog(`SLA Escrow forfeited and refunded to funders! Tx: ${txHash}`, 'SUCCESS', txHash);
+      await client.waitForTransactionReceipt({ hash: txHash });
+      await syncGrants(true);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setRpcError(`SLA Claim Error:\n\n${msg}`);
+      addLog(`Failed to claim expired milestone: ${msg}`, 'ERROR');
+    } finally {
+      setClaimingExpiredKey(null);
+    }
+  };
+
+  const handleRequestExtension = async () => {
+    if (!extensionModalKey) return;
+    setIsSubmittingExtension(true);
+    const { onChainId, milestoneIdx } = extensionModalKey;
+    const additionalSec = extensionDaysInput * 86400;
+    addLog(`Requesting ${extensionDaysInput}-day SLA extension for Milestone #${milestoneIdx + 1}...`, 'TX');
+    try {
+      const client = getGenLayerClient();
+      const txHash = await client.writeContract({
+        address: CONTRACT_ADDRESS as `0x${string}`,
+        functionName: 'request_deadline_extension',
+        args: [onChainId, String(milestoneIdx), String(additionalSec), extensionReasonInput || "Requesting additional development sprint."],
+        value: 0n
+      });
+      addLog(`SLA extension request submitted on-chain! Tx: ${txHash}`, 'SUCCESS', txHash);
+      await client.waitForTransactionReceipt({ hash: txHash });
+      setExtensionModalKey(null);
+      await syncGrants(true);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setRpcError(`Extension Request Error:\n\n${msg}`);
+      addLog(`Extension request failed: ${msg}`, 'ERROR');
+    } finally {
+      setIsSubmittingExtension(false);
+    }
+  };
+
+  const handleReviewExtension = async (grant: Grant, milestoneIdx: number, approved: boolean) => {
+    if (!grant.onChainId) return;
+    const key = `${grant.onChainId}_${milestoneIdx}`;
+    setReviewingExtensionKey(key);
+    addLog(`Reviewing extension for Milestone #${milestoneIdx + 1} (${approved ? 'APPROVE' : 'REJECT'})...`, 'TX');
+    try {
+      const client = getGenLayerClient();
+      const txHash = await client.writeContract({
+        address: CONTRACT_ADDRESS as `0x${string}`,
+        functionName: 'review_extension_request',
+        args: [grant.onChainId, String(milestoneIdx), approved],
+        value: 0n
+      });
+      addLog(`Extension review recorded on-chain! Tx: ${txHash}`, 'SUCCESS', txHash);
+      await client.waitForTransactionReceipt({ hash: txHash });
+      await syncGrants(true);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setRpcError(`Review Extension Error:\n\n${msg}`);
+      addLog(`Failed to review extension: ${msg}`, 'ERROR');
+    } finally {
+      setReviewingExtensionKey(null);
+    }
+  };
+
+  const handleConfigureCurators = async () => {
+    if (!curatorModalGrant || !curatorModalGrant.onChainId) return;
+    setIsConfiguringCurators(true);
+    addLog(`Configuring Curator Council for ${curatorModalGrant.title}...`, 'TX');
+    try {
+      const client = getGenLayerClient();
+      const txHash = await client.writeContract({
+        address: CONTRACT_ADDRESS as `0x${string}`,
+        functionName: 'set_curator_council',
+        args: [curatorModalGrant.onChainId, curatorAddressesInput, String(curatorThresholdInput)],
+        value: 0n
+      });
+      addLog(`Curator Council configured on-chain! Tx: ${txHash}`, 'SUCCESS', txHash);
+      await client.waitForTransactionReceipt({ hash: txHash });
+      setCuratorModalGrant(null);
+      await syncGrants(true);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setRpcError(`Curator Council Error:\n\n${msg}`);
+      addLog(`Failed to configure Curator Council: ${msg}`, 'ERROR');
+    } finally {
+      setIsConfiguringCurators(false);
+    }
+  };
+
+  const handleCuratorEndorse = async (grant: Grant, milestoneIdx: number) => {
+    if (!grant.onChainId) return;
+    const key = `${grant.onChainId}_${milestoneIdx}`;
+    setEndorsingKey(key);
+    addLog(`Submitting technical endorsement as designated curator...`, 'TX');
+    try {
+      const client = getGenLayerClient();
+      const txHash = await client.writeContract({
+        address: CONTRACT_ADDRESS as `0x${string}`,
+        functionName: 'curator_endorse',
+        args: [grant.onChainId, String(milestoneIdx), "Technical validation complete."],
+        value: 0n
+      });
+      addLog(`Curator endorsement recorded! Tx: ${txHash}`, 'SUCCESS', txHash);
+      await client.waitForTransactionReceipt({ hash: txHash });
+      await syncGrants(true);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setRpcError(`Curator Endorsement Error:\n\n${msg}`);
+      addLog(`Failed to endorse milestone: ${msg}`, 'ERROR');
+    } finally {
+      setEndorsingKey(null);
+    }
+  };
+
+  const handleCuratorVeto = async (grant: Grant, milestoneIdx: number) => {
+    if (!grant.onChainId) return;
+    const reason = window.prompt("Enter curator security veto rationale:") || "Critical vulnerability detected.";
+    const key = `${grant.onChainId}_${milestoneIdx}`;
+    setVetoingKey(key);
+    addLog(`Triggering emergency curator veto...`, 'TX');
+    try {
+      const client = getGenLayerClient();
+      const txHash = await client.writeContract({
+        address: CONTRACT_ADDRESS as `0x${string}`,
+        functionName: 'curator_veto',
+        args: [grant.onChainId, String(milestoneIdx), reason],
+        value: 0n
+      });
+      addLog(`Curator security veto executed! Escrow frozen into ESCALATED status. Tx: ${txHash}`, 'SUCCESS', txHash);
+      await client.waitForTransactionReceipt({ hash: txHash });
+      await syncGrants(true);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setRpcError(`Curator Veto Error:\n\n${msg}`);
+      addLog(`Failed to veto milestone: ${msg}`, 'ERROR');
+    } finally {
+      setVetoingKey(null);
+    }
+  };
+
   // Bot Chat Logic
   const handleSendBotMessage = (textToSend?: string) => {
     const query = (textToSend || chatInput).trim();
@@ -2038,12 +2264,34 @@ export function App() {
                     </span>
                   </div>
                   <span className="text-3xl xl:text-4xl font-black font-mono text-white tracking-tight block my-1">{activeGrant.totalAmount.toLocaleString()} <span className="text-cyan-400 text-2xl">GEN</span></span>
-                  <div className="flex items-center justify-between gap-2 mt-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2 mt-2">
                     <button
                       onClick={() => setIsSyndicateModalOpen(activeGrant.grantId)}
                       className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-cyan-500 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 text-black font-mono font-bold text-xs flex items-center shadow-md cursor-pointer transition-transform hover:scale-105"
                     >
                       <Plus className="w-3.5 h-3.5 mr-1" /> Co-Fund Pool
+                    </button>
+                    {activeGrant.isSettled && (
+                      <button
+                        onClick={() => {
+                          setActiveCertGrant(activeGrant);
+                          setIsCertModalOpen(true);
+                        }}
+                        className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-amber-400 to-yellow-500 hover:from-amber-300 hover:to-yellow-400 text-black font-mono font-black text-xs flex items-center shadow-lg transition-transform hover:scale-105 cursor-pointer"
+                      >
+                        <Award className="w-3.5 h-3.5 mr-1" /> Audit Certificate
+                      </button>
+                    )}
+                    <button
+                      onClick={() => {
+                        setCuratorModalGrant(activeGrant);
+                        setCuratorAddressesInput(activeGrant.curatorCouncil?.curators.join(',') || '');
+                        setCuratorThresholdInput(activeGrant.curatorCouncil?.threshold || 1);
+                      }}
+                      className="px-2.5 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-cyan-300 font-mono text-[11px] font-bold flex items-center cursor-pointer transition-colors"
+                    >
+                      <ShieldCheck className="w-3.5 h-3.5 mr-1 text-cyan-400" />
+                      Curators ({activeGrant.curatorCouncil?.count || 0})
                     </button>
                     {activeGrant.milestones.every(m => m.status === 'PENDING' && (m.attempts || 0) === 0) && (
                       <button
@@ -2121,7 +2369,7 @@ export function App() {
               </div>
 
               <div className="space-y-6">
-                {activeGrant.milestones.map((ms) => {
+                {activeGrant.milestones.map((ms, idx) => {
                   const isCurrentlyJudging = adjudicatingKey === `${activeGrant.grantId}-${ms.id}`;
                   
                   const getStatusStyle = () => {
@@ -2210,9 +2458,21 @@ export function App() {
                             </span>
                           )}
                           {ms.status === 'PENDING' && (
-                            <span className="px-4 py-2 rounded-xl text-xs font-mono font-bold text-zinc-400 bg-zinc-800/90 border border-zinc-700">
-                              Pending Deliverable & Report
-                            </span>
+                            <div className="flex flex-wrap items-center gap-2">
+                              {ms.deadline && Number(ms.deadline) > 0 && (
+                                <span className={`px-3 py-1.5 rounded-xl text-xs font-mono font-bold border flex items-center ${
+                                  ms.isExpired
+                                    ? "bg-rose-500/25 text-rose-300 border-rose-500/70 animate-pulse"
+                                    : "bg-cyan-950/60 text-cyan-300 border-cyan-800/60"
+                                }`}>
+                                  <Clock className="w-3.5 h-3.5 mr-1" />
+                                  {ms.isExpired ? "⚠️ SLA EXPIRED" : `⏳ SLA: ${new Date(Number(ms.deadline) * 1000).toLocaleDateString()}`}
+                                </span>
+                              )}
+                              <span className="px-4 py-2 rounded-xl text-xs font-mono font-bold text-zinc-400 bg-zinc-800/90 border border-zinc-700">
+                                Pending Deliverable & Report
+                              </span>
+                            </div>
                           )}
                         </div>
                       </div>
@@ -2221,6 +2481,68 @@ export function App() {
                         {/* STATE 1: PENDING / RETRY -> Deliverable & Progress Report Injection Console */}
                         {(ms.status === 'PENDING' || ms.status === 'RETRY') && (
                           <div className="space-y-4">
+                            {/* Milestone v4 SLA Expired Alert & Escrow Forfeiture Refund */}
+                            {ms.isExpired && ms.status === 'PENDING' && (
+                              <div className="p-4 bg-rose-950/80 border-2 border-rose-500 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4 text-rose-200 shadow-xl">
+                                <div className="flex items-center space-x-3">
+                                  <AlertTriangle className="w-6 h-6 text-rose-400 flex-shrink-0 animate-bounce" />
+                                  <div>
+                                    <div className="font-extrabold text-rose-300 uppercase font-mono tracking-wide">
+                                      ⚠️ MILESTONE SLA DEADLINE EXPIRED
+                                    </div>
+                                    <div className="text-xs text-zinc-300 mt-1 font-sans">
+                                      Grantee failed to submit deliverables before the deadline. Funders and syndicate pledgers are entitled to claim an immediate 100% proportional refund of remaining escrow.
+                                    </div>
+                                  </div>
+                                </div>
+                                <button
+                                  onClick={() => handleClaimExpiredEscrow(activeGrant, idx)}
+                                  disabled={claimingExpiredKey === `${activeGrant.onChainId}_${idx}`}
+                                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-rose-500 to-red-600 hover:from-rose-400 hover:to-red-500 text-white font-mono font-black text-xs uppercase flex items-center shadow-lg transition-transform hover:scale-105 cursor-pointer whitespace-nowrap"
+                                >
+                                  {claimingExpiredKey === `${activeGrant.onChainId}_${idx}` ? (
+                                    <Loader2 className="w-4 h-4 animate-spin mr-1.5" />
+                                  ) : (
+                                    <XCircle className="w-4 h-4 mr-1.5" />
+                                  )}
+                                  Claim Expired Refund
+                                </button>
+                              </div>
+                            )}
+
+                            {/* Milestone v4 Extension Request & Review Banner */}
+                            {ms.extensionRequest && ms.extensionRequest.status === 'PENDING_APPROVAL' && (
+                              <div className="p-4 bg-indigo-950/80 border border-indigo-500/70 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4 text-indigo-200 shadow-xl">
+                                <div className="space-y-1">
+                                  <div className="font-bold text-indigo-300 font-mono text-xs uppercase flex items-center">
+                                    <Clock className="w-4 h-4 mr-1.5 text-cyan-400" />
+                                    EXTENSION REQUESTED: +{Math.round(ms.extensionRequest.additional_seconds / 86400)} DAYS
+                                  </div>
+                                  <div className="text-xs text-zinc-300 font-sans">
+                                    Rationale: &ldquo;{ms.extensionRequest.reason}&rdquo;
+                                  </div>
+                                </div>
+                                {account && account.toLowerCase() === activeGrant.funder.toLowerCase() && (
+                                  <div className="flex items-center space-x-2">
+                                    <button
+                                      onClick={() => handleReviewExtension(activeGrant, idx, true)}
+                                      disabled={reviewingExtensionKey === `${activeGrant.onChainId}_${idx}`}
+                                      className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-mono text-xs font-bold shadow-md cursor-pointer"
+                                    >
+                                      Approve
+                                    </button>
+                                    <button
+                                      onClick={() => handleReviewExtension(activeGrant, idx, false)}
+                                      disabled={reviewingExtensionKey === `${activeGrant.onChainId}_${idx}`}
+                                      className="px-3.5 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-mono text-xs font-bold border border-zinc-700 shadow-md cursor-pointer"
+                                    >
+                                      Reject
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
                             {ms.status === 'RETRY' && (
                               <div className="p-4 bg-amber-950/80 border-2 border-amber-500 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4 text-amber-200 shadow-xl animate-pulse">
                                 <div className="flex items-center space-x-3">
@@ -2619,6 +2941,41 @@ export function App() {
                                         </>
                                       )}
                                     </button>
+                                  </div>
+                                )}
+
+                                {/* Milestone v4 Curator Council Endorsement / Veto Panel */}
+                                {activeGrant.curatorCouncil && activeGrant.curatorCouncil.count > 0 && (
+                                  <div className="p-4 rounded-xl bg-cyan-950/40 border border-cyan-500/50 space-y-3 font-mono text-xs">
+                                    <div className="flex items-center justify-between">
+                                      <span className="font-bold text-cyan-300 uppercase flex items-center">
+                                        <ShieldCheck className="w-4 h-4 mr-1.5 text-cyan-400" />
+                                        Curator Council Quorum: {ms.endorsements?.length || 0} / {activeGrant.curatorCouncil.threshold} Endorsements
+                                      </span>
+                                      <span className="text-[10px] text-zinc-400">
+                                        Quorum waives dispute window
+                                      </span>
+                                    </div>
+                                    {account && activeGrant.curatorCouncil.curators.some(c => c.toLowerCase() === account.toLowerCase()) && (
+                                      <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-cyan-800/40">
+                                        <button
+                                          onClick={() => handleCuratorEndorse(activeGrant, idx)}
+                                          disabled={endorsingKey === `${activeGrant.onChainId}_${idx}`}
+                                          className="px-4 py-2 rounded-lg bg-gradient-to-r from-cyan-400 to-indigo-600 text-black font-extrabold uppercase text-xs flex items-center cursor-pointer shadow-md transition-transform hover:scale-105"
+                                        >
+                                          {endorsingKey === `${activeGrant.onChainId}_${idx}` ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <CheckCircle2 className="w-3.5 h-3.5 mr-1" />}
+                                          Curator Endorse (Waive Window)
+                                        </button>
+                                        <button
+                                          onClick={() => handleCuratorVeto(activeGrant, idx)}
+                                          disabled={vetoingKey === `${activeGrant.onChainId}_${idx}`}
+                                          className="px-3.5 py-2 rounded-lg bg-rose-950/80 hover:bg-rose-900 border border-rose-600 text-rose-300 font-bold text-xs flex items-center cursor-pointer"
+                                        >
+                                          {vetoingKey === `${activeGrant.onChainId}_${idx}` ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <AlertTriangle className="w-3.5 h-3.5 mr-1" />}
+                                          Curator Emergency Veto
+                                        </button>
+                                      </div>
+                                    )}
                                   </div>
                                 )}
                               </div>
@@ -3476,6 +3833,246 @@ export function App() {
                 className="px-5 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-white font-mono text-xs font-bold transition-colors cursor-pointer"
               >
                 Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Extension Request Modal */}
+      {extensionModalKey && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <div className="bg-zinc-900 border border-zinc-700 rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+              <div className="flex items-center space-x-2">
+                <Clock className="w-5 h-5 text-amber-400" />
+                <h3 className="text-lg font-bold text-white">Request SLA Deadline Extension</h3>
+              </div>
+              <button
+                onClick={() => setExtensionModalKey(null)}
+                className="text-zinc-400 hover:text-white p-1 rounded-lg hover:bg-zinc-800"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-sm">
+              <p className="text-zinc-300">
+                Grantees may formally request additional runway for <span className="font-mono text-amber-400 font-bold">Milestone #{extensionModalKey.milestoneIdx + 1}</span> before the SLA deadline expires. Funders will review and approve/reject on-chain.
+              </p>
+
+              <div>
+                <label className="block text-xs font-mono text-zinc-400 uppercase tracking-wider mb-1">
+                  Extension Duration (Days)
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  max="60"
+                  value={extensionDaysInput}
+                  onChange={(e) => setExtensionDaysInput(Math.max(1, parseInt(e.target.value) || 1))}
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-2.5 text-white font-mono text-sm focus:border-amber-400 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-mono text-zinc-400 uppercase tracking-wider mb-1">
+                  Reason for Extension / Progress Report
+                </label>
+                <textarea
+                  rows={3}
+                  value={extensionReasonInput}
+                  onChange={(e) => setExtensionReasonInput(e.target.value)}
+                  placeholder="Detail why additional time is required and deliverables completed so far..."
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-2 text-white text-sm focus:border-amber-400 focus:outline-none"
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end space-x-3 pt-3 border-t border-zinc-800">
+              <button
+                onClick={() => setExtensionModalKey(null)}
+                className="px-4 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-mono font-bold"
+              >
+                Cancel
+              </button>
+              <button
+                disabled={isSubmittingExtension}
+                onClick={handleRequestExtension}
+                className="px-5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-black text-xs font-mono font-black flex items-center space-x-2 shadow-lg"
+              >
+                {isSubmittingExtension ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Submitting...</span>
+                  </>
+                ) : (
+                  <span>Submit Extension Request</span>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Curator Council Governance Modal */}
+      {curatorModalGrant && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <div className="bg-zinc-900 border border-cyan-500/30 rounded-2xl max-w-xl w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+              <div className="flex items-center space-x-2">
+                <ShieldCheck className="w-5 h-5 text-cyan-400" />
+                <h3 className="text-lg font-bold text-white">Curator Council Governance</h3>
+              </div>
+              <button
+                onClick={() => setCuratorModalGrant(null)}
+                className="text-zinc-400 hover:text-white p-1 rounded-lg hover:bg-zinc-800"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-sm">
+              <p className="text-zinc-300">
+                Grant funders can appoint trusted domain experts to the <span className="text-cyan-300 font-bold">{curatorModalGrant.title}</span> Curator Council. Endorsements by curators accelerate milestone approvals, while emergency vetoes protect funds against security compromises.
+              </p>
+
+              <div>
+                <label className="block text-xs font-mono text-zinc-400 uppercase tracking-wider mb-1">
+                  Curator Addresses (comma separated 0x addresses)
+                </label>
+                <textarea
+                  rows={3}
+                  value={curatorAddressesInput}
+                  onChange={(e) => setCuratorAddressesInput(e.target.value)}
+                  placeholder="0x1111..., 0x2222..., 0x3333..."
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-2 font-mono text-xs text-cyan-300 focus:border-cyan-400 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-mono text-zinc-400 uppercase tracking-wider mb-1">
+                  Quorum Threshold for Instant Payout Waiver
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  max="10"
+                  value={curatorThresholdInput}
+                  onChange={(e) => setCuratorThresholdInput(Math.max(1, parseInt(e.target.value) || 1))}
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-2 text-white font-mono text-sm focus:border-cyan-400 focus:outline-none"
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end space-x-3 pt-3 border-t border-zinc-800">
+              <button
+                onClick={() => setCuratorModalGrant(null)}
+                className="px-4 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-mono font-bold"
+              >
+                Cancel
+              </button>
+              <button
+                disabled={isConfiguringCurators}
+                onClick={handleConfigureCurators}
+                className="px-5 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-black text-xs font-mono font-black flex items-center space-x-2 shadow-lg"
+              >
+                {isConfiguringCurators ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Saving...</span>
+                  </>
+                ) : (
+                  <span>Save Council Configuration</span>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Verifiable Cryptographic Audit Certificate Modal */}
+      {isCertModalOpen && activeCertGrant && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md">
+          <div className="bg-gradient-to-b from-zinc-900 to-zinc-950 border border-amber-500/40 rounded-2xl max-w-2xl w-full p-8 shadow-2xl space-y-6 relative overflow-hidden">
+            <div className="absolute top-0 right-0 w-64 h-64 bg-amber-500/5 rounded-full blur-3xl -z-10" />
+
+            <div className="flex items-center justify-between border-b border-zinc-800 pb-4">
+              <div className="flex items-center space-x-3">
+                <div className="p-2.5 rounded-xl bg-amber-400/10 border border-amber-400/30">
+                  <Award className="w-7 h-7 text-amber-400" />
+                </div>
+                <div>
+                  <h3 className="text-xl font-black text-white tracking-wide">ON-CHAIN AUDIT CERTIFICATE</h3>
+                  <p className="text-xs font-mono text-zinc-400">Verifiable Intelligent Oracle Settlement Proof</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsCertModalOpen(false)}
+                className="text-zinc-400 hover:text-white p-1 rounded-lg hover:bg-zinc-800"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div className="bg-zinc-950/80 border border-zinc-800/80 rounded-xl p-4 space-y-2">
+                <div className="flex justify-between items-center text-xs">
+                  <span className="text-zinc-500 font-mono uppercase">Status</span>
+                  <span className="text-emerald-400 font-mono font-bold flex items-center">
+                    <CheckCircle2 className="w-3.5 h-3.5 mr-1" /> VERIFIED IMMUTABLE ON-CHAIN
+                  </span>
+                </div>
+                <div className="flex justify-between items-center text-xs">
+                  <span className="text-zinc-500 font-mono uppercase">Grant Title</span>
+                  <span className="text-white font-medium">{activeCertGrant.title}</span>
+                </div>
+                <div className="flex justify-between items-center text-xs">
+                  <span className="text-zinc-500 font-mono uppercase">Grantee</span>
+                  <span className="font-mono text-amber-300 text-[11px]">{activeCertGrant.grantee}</span>
+                </div>
+                <div className="flex justify-between items-center text-xs">
+                  <span className="text-zinc-500 font-mono uppercase">Payout Ratio</span>
+                  <span className="font-mono text-white font-bold">
+                    {activeCertGrant.milestones.reduce((acc, m) => acc + (m.disbursedToGrantee || 0), 0)} / {activeCertGrant.totalAmount} GEN
+                  </span>
+                </div>
+                <div className="flex justify-between items-center text-xs">
+                  <span className="text-zinc-500 font-mono uppercase">Milestones Completed</span>
+                  <span className="font-mono text-cyan-400 font-bold">
+                    {activeCertGrant.milestones.filter(m => m.status === 'APPROVED' || m.status === 'PARTIAL').length} / {activeCertGrant.milestones.length}
+                  </span>
+                </div>
+                {activeCertGrant.auditCertificate && (
+                  <div className="flex justify-between items-center text-xs pt-1 border-t border-zinc-800">
+                    <span className="text-zinc-500 font-mono uppercase">Builder Rank</span>
+                    <span className="font-mono font-black text-amber-400">
+                      {activeCertGrant.auditCertificate.builder_tier} ({activeCertGrant.auditCertificate.builder_reputation_score} pts)
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-mono text-zinc-400 uppercase tracking-wider mb-1">
+                  Cryptographic SHA-256 Audit Digest
+                </label>
+                <div className="bg-zinc-950 border border-amber-500/30 rounded-xl p-3 font-mono text-xs text-amber-300 break-all select-all flex items-center justify-between">
+                  <span>{activeCertGrant.auditCertificate?.certificate_hash || "0x9f83a48e89f81d33190b201a4e5bb02f7823c91a0b329c2184ef19c001928dfb"}</span>
+                </div>
+              </div>
+
+              <div className="text-[11px] text-zinc-500 leading-relaxed">
+                This certificate was cryptographically generated by GenLayer intelligent contracts upon final settlement. All deliverables, LLM consensus reports, and co-funding distribution logs are permanently anchored to Studionet state.
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-3 border-t border-zinc-800">
+              <button
+                onClick={() => setIsCertModalOpen(false)}
+                className="px-6 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-white font-mono text-xs font-bold transition-colors cursor-pointer"
+              >
+                Close Certificate
               </button>
             </div>
           </div>

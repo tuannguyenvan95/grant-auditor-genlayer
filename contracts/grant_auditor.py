@@ -1,6 +1,7 @@
 # { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
 from genlayer import *
 import json
+import hashlib
 from dataclasses import dataclass
 
 @allow_storage
@@ -58,6 +59,14 @@ class Contract(gl.Contract):
     stats_appeals_won: TreeMap[str, bigint]   # address -> count of appeals won
     stats_appeals_lost: TreeMap[str, bigint]  # address -> count of appeals lost
     registered_users: TreeMap[str, str]       # "all" -> comma-separated list of all active addresses
+    # --- Milestone v4 SLA Deadlines, Curator Council & Cryptographic Certificates ---
+    milestone_deadlines: TreeMap[str, bigint]    # key: f"{grant_id}_{milestone_id}" -> timestamp deadline
+    extension_requests: TreeMap[str, str]        # key: f"{grant_id}_{milestone_id}" -> JSON extension request
+    grant_curators: TreeMap[str, str]            # key: grant_id -> comma-separated curator addresses
+    curator_thresholds: TreeMap[str, bigint]     # key: grant_id -> required curator approvals
+    curator_endorsements: TreeMap[str, str]      # key: f"{grant_id}_{milestone_id}" -> comma-separated endorser addresses
+    curator_vetoes: TreeMap[str, str]            # key: f"{grant_id}_{milestone_id}" -> veto reason
+    audit_certificates: TreeMap[str, str]        # key: grant_id -> JSON serialized certificate
 
     def __init__(self):
         self.next_grant_id = bigint(1)
@@ -104,6 +113,87 @@ class Contract(gl.Contract):
                 return
         grant.status = "CLOSED"
         self.grants[grant_id] = grant
+        self._generate_audit_certificate_internal(grant_id, grant)
+
+    def _generate_audit_certificate_internal(self, grant_id: str, grant: Grant) -> str:
+        """Milestone v4 Provenance Engine: Generates immutable cryptographic audit certificate."""
+        if not hasattr(self, "audit_certificates"):
+            self.audit_certificates = {}
+        if grant_id in self.audit_certificates:
+            return str(self.audit_certificates[grant_id])
+
+        total_ms = int(str(grant.num_milestones))
+        approved_count = 0
+        partial_count = 0
+        cut_count = 0
+        total_grantee_disbursed = 0
+        total_funder_refunded = 0
+        ms_summaries = []
+
+        for i in range(total_ms):
+            ms_key = self._milestone_key(grant_id, str(i))
+            if ms_key in self.milestones:
+                m = self.milestones[ms_key]
+                st = str(m.status)
+                if st == "APPROVED":
+                    approved_count += 1
+                elif st == "PARTIAL":
+                    partial_count += 1
+                elif st == "CUT":
+                    cut_count += 1
+                disb_g = int(str(getattr(m, "disbursed_to_grantee", bigint(0))))
+                disb_f = int(str(getattr(m, "disbursed_to_funder", bigint(0))))
+                total_grantee_disbursed += disb_g
+                total_funder_refunded += disb_f
+                ms_summaries.append({
+                    "id": str(i),
+                    "status": st,
+                    "disbursed": str(disb_g),
+                    "refunded": str(disb_f)
+                })
+
+        if approved_count == total_ms:
+            final_grade = "EXEMPLARY_COMPLETION"
+        elif cut_count == total_ms:
+            final_grade = "FORFEITED_OR_CUT"
+        else:
+            final_grade = "SUBSTANTIAL_PARTIAL_COMPLETION"
+
+        grantee_addr = str(grant.grantee).lower()
+        grantee_score = int(str(self.reputations[grantee_addr])) if hasattr(self, "reputations") and grantee_addr in self.reputations else 0
+        grantee_tier = self._get_reputation_tier(grantee_score)
+
+        curators_str = str(self.grant_curators[grant_id]) if hasattr(self, "grant_curators") and grant_id in self.grant_curators else ""
+
+        cert_payload = f"{grant_id}:{grant.funder}:{grant.grantee}:{grant.total_amount}:{approved_count}:{partial_count}:{cut_count}:{final_grade}:{grantee_score}"
+        cert_hash = hashlib.sha256(cert_payload.encode("utf-8")).hexdigest()
+
+        cert_data = {
+            "certificate_id": f"GA-CERT-V4-{grant_id}",
+            "certificate_hash": f"0x{cert_hash}",
+            "grant_id": grant_id,
+            "title": grant.title,
+            "funder": str(grant.funder),
+            "grantee": str(grant.grantee),
+            "total_escrow": str(grant.total_amount),
+            "total_disbursed_to_grantee": str(total_grantee_disbursed),
+            "total_refunded_to_funders": str(total_funder_refunded),
+            "milestones_total": total_ms,
+            "milestones_approved": approved_count,
+            "milestones_partial": partial_count,
+            "milestones_cut": cut_count,
+            "audit_grade": final_grade,
+            "builder_reputation_score": grantee_score,
+            "builder_tier": grantee_tier,
+            "curators_council": curators_str,
+            "auditor_protocol": "GenLayer Intelligent Consensus Oracle & Curator Council v4.0",
+            "issued_at": str(self._get_current_timestamp()),
+            "milestones_summary": ms_summaries
+        }
+
+        serialized = json.dumps(cert_data)
+        self.audit_certificates[grant_id] = serialized
+        return serialized
 
     def _register_user(self, address_str: str) -> None:
         addr = address_str.lower()
@@ -199,7 +289,7 @@ class Contract(gl.Contract):
         ms.disbursed_to_funder = getattr(ms, "disbursed_to_funder", bigint(0)) + bigint(disbursed_total)
 
     @gl.public.write.payable
-    def create_grant(self, grantee: str, title: str, proposal_url: str, milestone_amounts_str: str, milestone_criteria_json: str = "") -> str:
+    def create_grant(self, grantee: str, title: str, proposal_url: str, milestone_amounts_str: str, milestone_criteria_json: str = "", milestone_deadlines_str: str = "") -> str:
         funder = str(gl.message.sender_address).lower()
         grantee = str(grantee).lower()
         
@@ -246,6 +336,17 @@ class Contract(gl.Contract):
             except Exception:
                 criteria_list = []
 
+        deadline_list = []
+        if milestone_deadlines_str and str(milestone_deadlines_str).strip():
+            try:
+                d_str = str(milestone_deadlines_str).strip()
+                if d_str.startswith("["):
+                    deadline_list = json.loads(d_str)
+                else:
+                    deadline_list = [int(x.strip()) for x in d_str.split(",") if x.strip()]
+            except Exception:
+                deadline_list = []
+
         grant_id = str(self.next_grant_id)
         self.next_grant_id += bigint(1)
 
@@ -267,6 +368,10 @@ class Contract(gl.Contract):
                 disbursed_to_funder=bigint(0),
                 appeal_count=bigint(0)
             )
+            if not hasattr(self, "milestone_deadlines"):
+                self.milestone_deadlines = {}
+            if i < len(deadline_list) and int(str(deadline_list[i])) > 0:
+                self.milestone_deadlines[ms_key] = bigint(int(str(deadline_list[i])))
 
         new_grant = Grant(
             id=grant_id,
@@ -413,6 +518,369 @@ class Contract(gl.Contract):
             "pledges": pledges_data
         })
 
+    # =========================================================================
+    # Milestone v4: SLA Deadlines, Capital Safety & Curator Council Governance
+    # =========================================================================
+
+    @gl.public.write
+    def set_milestone_deadline(self, grant_id: str, milestone_id: str, deadline_timestamp: str) -> str:
+        """Milestone v4 SLA: Funder sets or adjusts the SLA deadline for a pending milestone."""
+        if grant_id not in self.grants:
+            raise UserError("Grant not found.")
+        grant = self.grants[grant_id]
+
+        sender = str(gl.message.sender_address).lower()
+        if sender != str(grant.funder).lower():
+            raise UserError("Only the grant funder can configure milestone SLA deadlines.")
+
+        ms_key = self._milestone_key(grant_id, milestone_id)
+        if ms_key not in self.milestones:
+            raise UserError("Milestone not found.")
+        ms = self.milestones[ms_key]
+        if ms.status != "PENDING":
+            raise UserError("SLA deadline can only be configured for PENDING milestones.")
+
+        dl = int(str(deadline_timestamp).strip())
+        if dl <= 0:
+            raise UserError("deadline_timestamp must be greater than 0.")
+
+        if not hasattr(self, "milestone_deadlines"):
+            self.milestone_deadlines = {}
+        self.milestone_deadlines[ms_key] = bigint(dl)
+
+        return json.dumps({
+            "status": "DEADLINE_CONFIGURED",
+            "grant_id": grant_id,
+            "milestone_id": milestone_id,
+            "deadline": dl
+        })
+
+    @gl.public.write
+    def claim_expired_milestone(self, grant_id: str, milestone_id: str) -> str:
+        """Milestone v4 Capital Safety: Forfeits unfulfilled milestone past SLA deadline, refunding funders proportionally."""
+        if grant_id not in self.grants:
+            raise UserError("Grant not found.")
+        grant = self.grants[grant_id]
+        if grant.status == "CLOSED":
+            raise UserError("Grant is already closed.")
+
+        ms_key = self._milestone_key(grant_id, milestone_id)
+        if ms_key not in self.milestones:
+            raise UserError("Milestone not found.")
+        ms = self.milestones[ms_key]
+
+        if ms.status != "PENDING":
+            raise UserError(f"Milestone cannot be claimed: status is '{ms.status}' (must be PENDING).")
+
+        sender = str(gl.message.sender_address).lower()
+        funder = str(grant.funder).lower()
+        
+        pledgers_str = str(self.grant_pledgers[grant_id]) if hasattr(self, "grant_pledgers") and grant_id in self.grant_pledgers else ""
+        plist = [p.strip().lower() for p in pledgers_str.split(",") if p.strip()]
+        if sender != funder and sender not in plist:
+            raise UserError("Only the grant funder or co-funder syndicate pledgers can claim expired milestone escrow.")
+
+        deadline = 0
+        if hasattr(self, "milestone_deadlines") and ms_key in self.milestone_deadlines:
+            deadline = int(str(self.milestone_deadlines[ms_key]))
+
+        if deadline <= 0:
+            raise UserError("No SLA deadline has been configured for this milestone.")
+
+        curr_ts = int(str(self._get_current_timestamp()))
+        if curr_ts <= deadline:
+            time_left = deadline - curr_ts
+            raise UserError(f"Milestone SLA deadline has not expired yet ({time_left} seconds remaining).")
+
+        ms.status = "CUT"
+        ms.reason = f"🚫 [SLA EXPIRED] Builder failed to submit deliverables before deadline ({deadline}). Escrow forfeited."
+
+        rem_escrow = ms.amount - getattr(ms, "disbursed_to_grantee", bigint(0)) - getattr(ms, "disbursed_to_funder", bigint(0))
+        if rem_escrow > bigint(0):
+            self._refund_milestone_escrow(grant_id, ms, grant, rem_escrow)
+
+        self.milestones[ms_key] = ms
+
+        self._update_reputation(str(grant.grantee), -10)
+        self._inc_stat("failed", str(grant.grantee))
+
+        self._maybe_close_grant(grant_id, grant)
+
+        return json.dumps({
+            "status": "EXPIRED_ESCROW_CLAIMED",
+            "grant_id": grant_id,
+            "milestone_id": milestone_id,
+            "refunded_amount": str(rem_escrow),
+            "claimed_by": sender
+        })
+
+    @gl.public.write
+    def request_deadline_extension(self, grant_id: str, milestone_id: str, additional_seconds: str, reason: str) -> str:
+        """Milestone v4 SLA Flexibility: Grantee submits a formal on-chain deadline extension request."""
+        if grant_id not in self.grants:
+            raise UserError("Grant not found.")
+        grant = self.grants[grant_id]
+        if grant.status == "CLOSED":
+            raise UserError("Grant is closed.")
+
+        sender = str(gl.message.sender_address).lower()
+        if sender != str(grant.grantee).lower():
+            raise UserError("Only the grantee can request a milestone deadline extension.")
+
+        ms_key = self._milestone_key(grant_id, milestone_id)
+        if ms_key not in self.milestones:
+            raise UserError("Milestone not found.")
+        ms = self.milestones[ms_key]
+        if ms.status != "PENDING":
+            raise UserError("Extension can only be requested for PENDING milestones.")
+
+        try:
+            extra_sec = int(str(additional_seconds).strip())
+            if extra_sec <= 0:
+                raise UserError("additional_seconds must be greater than 0.")
+        except Exception:
+            raise UserError("Invalid additional_seconds format.")
+
+        req_payload = {
+            "grant_id": grant_id,
+            "milestone_id": milestone_id,
+            "additional_seconds": extra_sec,
+            "reason": str(reason).strip(),
+            "status": "PENDING_APPROVAL",
+            "requested_at": int(str(self._get_current_timestamp()))
+        }
+        if not hasattr(self, "extension_requests"):
+            self.extension_requests = {}
+        self.extension_requests[ms_key] = json.dumps(req_payload)
+
+        return json.dumps({
+            "status": "EXTENSION_REQUESTED",
+            "grant_id": grant_id,
+            "milestone_id": milestone_id,
+            "additional_seconds": extra_sec,
+            "reason": str(reason).strip()
+        })
+
+    @gl.public.write
+    def review_extension_request(self, grant_id: str, milestone_id: str, approved: bool) -> str:
+        """Milestone v4 Governance: Funder reviews and approves/rejects builder extension request."""
+        if grant_id not in self.grants:
+            raise UserError("Grant not found.")
+        grant = self.grants[grant_id]
+
+        sender = str(gl.message.sender_address).lower()
+        if sender != str(grant.funder).lower():
+            raise UserError("Only the grant funder can review extension requests.")
+
+        ms_key = self._milestone_key(grant_id, milestone_id)
+        if not hasattr(self, "extension_requests") or ms_key not in self.extension_requests:
+            raise UserError("No active extension request found for this milestone.")
+
+        req = json.loads(str(self.extension_requests[ms_key]))
+        if req.get("status") != "PENDING_APPROVAL":
+            raise UserError(f"Extension request is not pending: status is {req.get('status')}.")
+
+        if approved:
+            req["status"] = "APPROVED"
+            extra_sec = int(str(req.get("additional_seconds", 0)))
+            curr_dl = int(str(self.milestone_deadlines[ms_key])) if hasattr(self, "milestone_deadlines") and ms_key in self.milestone_deadlines else int(str(self._get_current_timestamp()))
+            new_dl = curr_dl + extra_sec
+            if not hasattr(self, "milestone_deadlines"):
+                self.milestone_deadlines = {}
+            self.milestone_deadlines[ms_key] = bigint(new_dl)
+            self.extension_requests[ms_key] = json.dumps(req)
+            self._update_reputation(str(grant.grantee), 2)
+            return json.dumps({"status": "EXTENSION_APPROVED", "new_deadline": new_dl})
+        else:
+            req["status"] = "REJECTED"
+            self.extension_requests[ms_key] = json.dumps(req)
+            return json.dumps({"status": "EXTENSION_REJECTED"})
+
+    @gl.public.write
+    def set_curator_council(self, grant_id: str, curators_str: str, threshold: str = "1") -> str:
+        """Milestone v4 Institutional Governance: Funder assigns trusted peer curators and quorum threshold."""
+        if grant_id not in self.grants:
+            raise UserError("Grant not found.")
+        grant = self.grants[grant_id]
+
+        sender = str(gl.message.sender_address).lower()
+        if sender != str(grant.funder).lower():
+            raise UserError("Only the grant funder can configure the Curator Council.")
+
+        clist = [c.strip().lower() for c in str(curators_str).split(",") if c.strip()]
+        if not clist:
+            raise UserError("At least one curator address is required.")
+
+        thresh = int(str(threshold).strip())
+        if thresh < 1 or thresh > len(clist):
+            raise UserError(f"Threshold must be between 1 and {len(clist)}.")
+
+        if not hasattr(self, "grant_curators"):
+            self.grant_curators = {}
+        if not hasattr(self, "curator_thresholds"):
+            self.curator_thresholds = {}
+
+        self.grant_curators[grant_id] = ",".join(clist)
+        self.curator_thresholds[grant_id] = bigint(thresh)
+
+        for c in clist:
+            self._register_user(c)
+
+        return json.dumps({
+            "status": "CURATOR_COUNCIL_CONFIGURED",
+            "grant_id": grant_id,
+            "curators": clist,
+            "threshold": thresh
+        })
+
+    @gl.public.write
+    def curator_endorse(self, grant_id: str, milestone_id: str, review_notes: str = "") -> str:
+        """Milestone v4 Peer Review: Curator endorses deliverable; quorum waives cooling-off delay for instant payout."""
+        if grant_id not in self.grants:
+            raise UserError("Grant not found.")
+        grant = self.grants[grant_id]
+
+        sender = str(gl.message.sender_address).lower()
+        curators_str = str(self.grant_curators[grant_id]) if hasattr(self, "grant_curators") and grant_id in self.grant_curators else ""
+        clist = [c.strip().lower() for c in curators_str.split(",") if c.strip()]
+        if sender not in clist:
+            raise UserError("Sender is not a designated curator for this grant.")
+
+        ms_key = self._milestone_key(grant_id, milestone_id)
+        if ms_key not in self.milestones:
+            raise UserError("Milestone not found.")
+        ms = self.milestones[ms_key]
+
+        if not hasattr(self, "curator_endorsements"):
+            self.curator_endorsements = {}
+        endorsers_str = str(self.curator_endorsements[ms_key]) if ms_key in self.curator_endorsements else ""
+        elist = [e.strip().lower() for e in endorsers_str.split(",") if e.strip()]
+
+        if sender in elist:
+            raise UserError("Curator has already endorsed this milestone.")
+
+        elist.append(sender)
+        self.curator_endorsements[ms_key] = ",".join(elist)
+
+        self._update_reputation(sender, 5)
+
+        thresh = int(str(self.curator_thresholds[grant_id])) if hasattr(self, "curator_thresholds") and grant_id in self.curator_thresholds else 1
+        is_quorum = len(elist) >= thresh
+
+        waived = False
+        if is_quorum and ms.status == "AWAITING_PAYOUT":
+            ms.payout_ready_at = self._get_current_timestamp()
+            ms.reason = f"✓ [CURATOR CONSENSUS REACHED] Cooling-off period waived by {len(elist)}/{thresh} curators. Ready for immediate payout."
+            self.milestones[ms_key] = ms
+            self._update_reputation(str(grant.grantee), 10)
+            waived = True
+
+        return json.dumps({
+            "status": "ENDORSEMENT_RECORDED",
+            "endorser": sender,
+            "total_endorsements": len(elist),
+            "threshold": thresh,
+            "quorum_reached": is_quorum,
+            "cooling_off_waived": waived
+        })
+
+    @gl.public.write
+    def curator_veto(self, grant_id: str, milestone_id: str, veto_reason: str) -> str:
+        """Milestone v4 Security Veto: Curator flags deliverable, freezing escrow into ESCALATED status."""
+        if grant_id not in self.grants:
+            raise UserError("Grant not found.")
+        grant = self.grants[grant_id]
+
+        sender = str(gl.message.sender_address).lower()
+        curators_str = str(self.grant_curators[grant_id]) if hasattr(self, "grant_curators") and grant_id in self.grant_curators else ""
+        clist = [c.strip().lower() for c in curators_str.split(",") if c.strip()]
+        if sender not in clist:
+            raise UserError("Sender is not a designated curator for this grant.")
+
+        ms_key = self._milestone_key(grant_id, milestone_id)
+        if ms_key not in self.milestones:
+            raise UserError("Milestone not found.")
+        ms = self.milestones[ms_key]
+
+        if self._is_terminal_status(ms.status):
+            raise UserError(f"Cannot veto milestone in terminal status: {ms.status}")
+
+        if not hasattr(self, "curator_vetoes"):
+            self.curator_vetoes = {}
+        self.curator_vetoes[ms_key] = str(veto_reason).strip()
+
+        ms.status = "ESCALATED"
+        ms.reason = f"⚠️ [CURATOR VETO TRIGGERED] Vetoed by curator {sender}. Reason: {str(veto_reason).strip()}"
+        self.milestones[ms_key] = ms
+
+        return json.dumps({
+            "status": "CURATOR_VETOED",
+            "curator": sender,
+            "reason": str(veto_reason).strip()
+        })
+
+    @gl.public.write
+    def generate_audit_certificate(self, grant_id: str) -> str:
+        """Milestone v4 Explicit Mint: Generates verifiable cryptographic certificate if grant is closed."""
+        if grant_id not in self.grants:
+            raise UserError("Grant not found.")
+        grant = self.grants[grant_id]
+        if grant.status != "CLOSED":
+            raise UserError("Cannot generate audit certificate for unclosed grant.")
+        return self._generate_audit_certificate_internal(grant_id, grant)
+
+    @gl.public.view
+    def get_audit_certificate(self, grant_id: str) -> str:
+        """Milestone v4 Public Dossier: Query verifiable cryptographic audit certificate."""
+        if grant_id not in self.grants:
+            raise UserError("Grant not found.")
+        grant = self.grants[grant_id]
+        if hasattr(self, "audit_certificates") and grant_id in self.audit_certificates:
+            return str(self.audit_certificates[grant_id])
+        if grant.status == "CLOSED":
+            return self._generate_audit_certificate_internal(grant_id, grant)
+        return json.dumps({"status": "GRANT_NOT_CLOSED", "message": "Audit certificate is generated upon grant closure."})
+
+    @gl.public.view
+    def get_curator_council(self, grant_id: str) -> str:
+        """Milestone v4 Governance View: Inspect Curator Council members and threshold."""
+        if grant_id not in self.grants:
+            raise UserError("Grant not found.")
+        curators_str = str(self.grant_curators[grant_id]) if hasattr(self, "grant_curators") and grant_id in self.grant_curators else ""
+        clist = [c.strip().lower() for c in curators_str.split(",") if c.strip()]
+        thresh = int(str(self.curator_thresholds[grant_id])) if hasattr(self, "curator_thresholds") and grant_id in self.curator_thresholds else 0
+        return json.dumps({
+            "grant_id": grant_id,
+            "curators": clist,
+            "threshold": thresh,
+            "count": len(clist)
+        })
+
+    @gl.public.view
+    def get_milestone_sla(self, grant_id: str, milestone_id: str) -> str:
+        """Milestone v4 SLA Inspector: Query milestone deadline, remaining time, and extension status."""
+        ms_key = self._milestone_key(grant_id, milestone_id)
+        if ms_key not in self.milestones:
+            raise UserError("Milestone not found.")
+        ms = self.milestones[ms_key]
+        dl = int(str(self.milestone_deadlines[ms_key])) if hasattr(self, "milestone_deadlines") and ms_key in self.milestone_deadlines else 0
+        curr_ts = int(str(self._get_current_timestamp()))
+        is_expired = dl > 0 and curr_ts > dl and ms.status == "PENDING"
+        rem_sec = max(0, dl - curr_ts) if dl > 0 else 0
+        ext_req = json.loads(str(self.extension_requests[ms_key])) if hasattr(self, "extension_requests") and ms_key in self.extension_requests else None
+
+        endorsers_str = str(self.curator_endorsements[ms_key]) if hasattr(self, "curator_endorsements") and ms_key in self.curator_endorsements else ""
+        elist = [e.strip().lower() for e in endorsers_str.split(",") if e.strip()]
+
+        return json.dumps({
+            "deadline": dl,
+            "remaining_seconds": rem_sec,
+            "is_expired": is_expired,
+            "extension_request": ext_req,
+            "endorsements_count": len(elist),
+            "veto": str(self.curator_vetoes[ms_key]) if hasattr(self, "curator_vetoes") and ms_key in self.curator_vetoes else None
+        })
+
     @gl.public.write
     def submit_evidence(self, grant_id: str, milestone_id: str, evidence_url: str, progress_report: str = "", evidence_hash: str = "") -> str:
         if grant_id not in self.grants:
@@ -432,6 +900,13 @@ class Contract(gl.Contract):
         ms = self.milestones[ms_key]
         if ms.status not in ["PENDING", "RETRY", "ESCALATED"]:
             raise UserError(f"Milestone cannot be submitted in status: {ms.status}. Either already submitted/approved or permanently closed.")
+
+        # Milestone v4 SLA Deadline Enforcement
+        dl = int(str(self.milestone_deadlines[ms_key])) if hasattr(self, "milestone_deadlines") and ms_key in self.milestone_deadlines else 0
+        if dl > 0:
+            curr_ts = int(str(self._get_current_timestamp()))
+            if curr_ts > dl:
+                raise UserError(f"Milestone SLA deadline has expired ({dl}). Please request an extension from the funder.")
             
         if not evidence_url or not str(evidence_url).strip():
             raise UserError("Evidence URL cannot be empty.")
@@ -1185,6 +1660,13 @@ class Contract(gl.Contract):
                 disb_funder = getattr(m, "disbursed_to_funder", bigint(0))
                 rem_liab = m.amount - disb_grantee - disb_funder
 
+                dl = int(str(self.milestone_deadlines[ms_key])) if hasattr(self, "milestone_deadlines") and ms_key in self.milestone_deadlines else 0
+                curr_ts = int(str(self._get_current_timestamp()))
+                is_expired = dl > 0 and curr_ts > dl and m.status == "PENDING"
+                ext_req = json.loads(str(self.extension_requests[ms_key])) if hasattr(self, "extension_requests") and ms_key in self.extension_requests else None
+                endorsers_str = str(self.curator_endorsements[ms_key]) if hasattr(self, "curator_endorsements") and ms_key in self.curator_endorsements else ""
+                elist = [e.strip().lower() for e in endorsers_str.split(",") if e.strip()]
+
                 ms_list.append({
                     "id": m.id,
                     "amount": str(m.amount),
@@ -1201,8 +1683,19 @@ class Contract(gl.Contract):
                     "remaining_liability": str(rem_liab),
                     "appeal_count": str(getattr(m, "appeal_count", 0)),
                     "is_fast_track": grantee_score >= 50,
+                    "deadline": str(dl),
+                    "is_expired": is_expired,
+                    "extension_request": ext_req,
+                    "endorsements": elist,
                     "appeal": appeal_data
                 })
+
+        cert_data = None
+        if g.status == "CLOSED":
+            try:
+                cert_data = json.loads(self.get_audit_certificate(grant_id))
+            except Exception:
+                cert_data = None
 
         res = {
             "id": g.id,
@@ -1216,6 +1709,8 @@ class Contract(gl.Contract):
             "syndicate_pool": syndicate_info,
             "funder_reputation": {"score": funder_score, "tier": self._get_reputation_tier(funder_score)},
             "grantee_reputation": {"score": grantee_score, "tier": self._get_reputation_tier(grantee_score)},
+            "curator_council": json.loads(self.get_curator_council(grant_id)),
+            "audit_certificate": cert_data,
             "milestones": ms_list
         }
         return json.dumps(res)
@@ -1266,6 +1761,13 @@ class Contract(gl.Contract):
                         disb_funder = getattr(m, "disbursed_to_funder", bigint(0))
                         rem_liab = m.amount - disb_grantee - disb_funder
 
+                        dl = int(str(self.milestone_deadlines[ms_key])) if hasattr(self, "milestone_deadlines") and ms_key in self.milestone_deadlines else 0
+                        curr_ts = int(str(self._get_current_timestamp()))
+                        is_expired = dl > 0 and curr_ts > dl and m.status == "PENDING"
+                        ext_req = json.loads(str(self.extension_requests[ms_key])) if hasattr(self, "extension_requests") and ms_key in self.extension_requests else None
+                        endorsers_str = str(self.curator_endorsements[ms_key]) if hasattr(self, "curator_endorsements") and ms_key in self.curator_endorsements else ""
+                        elist = [e.strip().lower() for e in endorsers_str.split(",") if e.strip()]
+
                         ms_list.append({
                             "id": m.id,
                             "amount": str(m.amount),
@@ -1282,8 +1784,20 @@ class Contract(gl.Contract):
                             "remaining_liability": str(rem_liab),
                             "appeal_count": str(getattr(m, "appeal_count", 0)),
                             "is_fast_track": grantee_score >= 50,
+                            "deadline": str(dl),
+                            "is_expired": is_expired,
+                            "extension_request": ext_req,
+                            "endorsements": elist,
                             "appeal": appeal_data
                         })
+
+                cert_data = None
+                if g.status == "CLOSED":
+                    try:
+                        cert_data = json.loads(self.get_audit_certificate(gid))
+                    except Exception:
+                        cert_data = None
+
                 res.append({
                     "id": g.id,
                     "title": g.title,
@@ -1296,6 +1810,8 @@ class Contract(gl.Contract):
                     "syndicate_pool": syndicate_info,
                     "funder_reputation": {"score": funder_score, "tier": self._get_reputation_tier(funder_score)},
                     "grantee_reputation": {"score": grantee_score, "tier": self._get_reputation_tier(grantee_score)},
+                    "curator_council": json.loads(self.get_curator_council(gid)),
+                    "audit_certificate": cert_data,
                     "milestones": ms_list
                 })
         return json.dumps(res)
